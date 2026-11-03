@@ -197,6 +197,11 @@ details summary{cursor:pointer;color:var(--muted);font-weight:600;padding:4px 0}
 .fld{display:flex;flex-direction:column;gap:4px}
 .fld label{font-size:12px;font-weight:600;color:var(--muted)}
 .fld input,.fld select,.fld textarea{border:1px solid var(--line);border-radius:9px;padding:7px 9px;background:var(--bg);width:100%}
+.login{position:fixed;inset:0;z-index:80;background:radial-gradient(circle at 20% 10%,var(--accent-soft),var(--bg) 60%);display:grid;place-items:center;padding:16px}
+.login-box{width:min(380px,100%);padding:26px;display:flex;flex-direction:column;gap:12px}
+.login-box .brand{font-size:28px;color:var(--accent);margin:0}
+.login-box p{margin:0}
+.lerr{color:var(--red);font-weight:600;font-size:13px;min-height:1em}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;font-size:13px;z-index:60;max-width:calc(100% - 32px)}
 @media (prefers-reduced-motion:no-preference){.card,.prop{animation:in .18s ease-out}@keyframes in{from{transform:translateY(3px)}to{transform:none}}}
 </style>
@@ -207,6 +212,7 @@ details summary{cursor:pointer;color:var(--muted);font-weight:600;padding:4px 0}
     <p class="brand-sub">Prazos, pastas e cadastros</p>
     <div class="tabs" id="tabs"></div>
     <div class="store"><span class="dot" id="storeDot"></span><span id="storeTxt">Conectando…</span></div>
+    <div class="actions" id="acct" hidden style="margin-top:8px"><button class="btn small ghost" id="btnSenha">Trocar senha</button><button class="btn small ghost" id="btnSair">Sair</button></div>
   </nav>
   <main id="main"></main>
   <aside class="chat panel" id="chat" hidden>
@@ -227,7 +233,7 @@ const CHECKLIST=["CTPS","ASOs (admissional e demissional)","Contrato de Trabalho
 const TIPOS={prazo:"Prazos",docs:"Solicitação de documentos",semaud:"Cadastrados sem audiência",cadastro:"Processos para cadastrar",ok:"Sem pendências"};
 const STEPS=[["datajuri","Cadastro no Data Júri"],["contratos","Solicitado contratos"],["documentos","Solicitado documentos"],["pastaRT","Criada pasta de RT"],["pastaSub","Criada pasta de subsídios"],["pauta","Colocado na pauta de audiência"],["audiencia","Cadastrada audiência"]];
 
-let items=[], view="painel", calMonth=null, selDay=null, statFilter=null, docFilter=[], search="";
+let items=[], view=(()=>{try{const v=localStorage.getItem("rp_view");return ["painel","prazo","docs","semaud","cadastro","ok","ponto"].includes(v)?v:"painel"}catch(e){return "painel"}})(), calMonth=null, selDay=null, statFilter=null, docFilter=[], search="";
 /* prazos iniciais: usados só na primeira abertura fora do Claude (GitHub) */
 const SEED=[
  {id:"kelvy-apolice",tipo:"prazo",processo:"0011785-59.2025.5.15.0027",reclamante:"Kelvy Alves Nunes",obs:"Acompanhar pagamento da apólice solicitada, com o fatal até 04/11.",assunto:"Apólice Seguro Garantia Judicial: Kelvy Alves Nunes - RT 0011785-59.2025.5.15.0027",prazo:"2026-11-03",fatal:"2026-11-04",concluido:null,criadoEm:"2026-11-03T12:00:00.000Z"},
@@ -313,6 +319,7 @@ async function boot(){
   render();
   let db=null;
   try{db=window.claude?.use?await window.claude.use("db"):null}catch(e){db=null}
+  if(!db&&!window.claude){aiMode.textContent="Leitura automática ativa";await startCloud();return}
   if(!db){localMode=true;try{const raw=localStorage.getItem("rp_items");items=raw===null?SEED.map(x=>({...x})):JSON.parse(raw);if(raw===null)persistLocal();dias=JSON.parse(localStorage.getItem("rp_dias")||"{}")}catch(e){items=SEED.map(x=>({...x}))}
     itemsLoaded=diasLoaded=true;setStore("warn","Modo local: salvo só neste navegador");render();}
   else{
@@ -325,15 +332,75 @@ async function boot(){
   try{sample=window.claude?.use?await window.claude.use("sample"):null}catch(e){sample=null}
   aiMode.textContent=sample?"IA ativa":"Leitura automática ativa";
 }
+/* ---------- nuvem própria (Google Apps Script) para a versão do GitHub ---------- */
+const API_URL_FIXA="https://script.google.com/macros/s/AKfycbxVqqlJdhAQOTZt-TZH9xFzzkEy3z2bhYS_NqlzTAhXhpaqOdhmNHpRN95UR-taAkc/exec";
+let cloudMode=false, PASS=null, pendingWrites=0;
+function apiUrl(){if(API_URL_FIXA)return API_URL_FIXA;try{return localStorage.getItem("rp_api")||""}catch(e){return""}}
+async function api(action,payload={}){
+  let r;try{r=await fetch(apiUrl(),{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action,senha:PASS,...payload})})}catch(e){throw {erro:"rede"}}
+  let j;try{j=await r.json()}catch(e){throw {erro:"resposta"}}
+  if(!j.ok)throw j;return j;
+}
+function applyData(d){items=d.items||[];dias=d.dias||{};itemsLoaded=diasLoaded=true;render()}
+async function cloudWrite(action,payload){
+  pendingWrites++;setStore("warn","Salvando…");
+  try{const j=await api(action,payload);pendingWrites--;setStore("ok","Salvo na nuvem");if(pendingWrites===0&&j.dados)applyData(j.dados)}
+  catch(e){pendingWrites--;setStore("warn","Não salvou. Confira a internet");toast(e.erro==="senha_incorreta"?"Sua senha mudou em outro computador. Entre de novo.":"Não consegui salvar na nuvem. Tente de novo.")}
+}
+function refreshCloud(){
+  const a=document.activeElement;if(!cloudMode||!PASS||document.hidden||pendingWrites||modalRoot.innerHTML||(a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)&&main.contains(a)))return;
+  api("get").then(j=>{if(!pendingWrites)applyData(j.dados)}).catch(()=>{});
+}
+const ERROS={senha_incorreta:"Senha incorreta.",senha_curta:"A senha precisa de pelo menos 4 caracteres.",rede:"Não consegui falar com o servidor. Confira a internet e o link do Apps Script.",resposta:"O link não respondeu como esperado. Confira se é o link do App da Web (termina em /exec)."};
+function startCloud(){
+  return new Promise(resolve=>{
+    const root=document.createElement("div");root.className="login";document.body.appendChild(root);
+    const step=async(msg)=>{
+      if(!apiUrl()){root.innerHTML=`<form class="login-box panel" id="lf"><p class="brand">Rotina<br>Pacaembu</p><p class="muted">Cole o link do seu servidor (Apps Script). Ele termina em <b>/exec</b>.</p><div class="fld"><label for="lurl">Link do servidor</label><input id="lurl" required placeholder="https://script.google.com/macros/s/…/exec"></div><p class="lerr">${msg||""}</p><button class="btn primary" type="submit">Continuar</button></form>`;
+        lf.onsubmit=e=>{e.preventDefault();try{localStorage.setItem("rp_api",lurl.value.trim())}catch(err){}step()};return}
+      root.innerHTML=`<div class="login-box panel"><p class="brand">Rotina<br>Pacaembu</p><p class="muted">Conectando…</p></div>`;
+      let st;try{st=await api("status")}catch(e){root.innerHTML=`<div class="login-box panel"><p class="brand">Rotina<br>Pacaembu</p><p class="lerr">${ERROS[e.erro]||"Erro ao conectar."}</p><div class="actions"><button class="btn primary" id="lretry">Tentar de novo</button>${API_URL_FIXA?"":`<button class="btn" id="lchg">Trocar link</button>`}</div></div>`;
+        lretry.onclick=()=>step();if(!API_URL_FIXA)lchg.onclick=()=>{try{localStorage.removeItem("rp_api")}catch(err){}step()};return}
+      const criar=!st.temSenha;
+      root.innerHTML=`<form class="login-box panel" id="lf"><p class="brand">Rotina<br>Pacaembu</p><p class="muted">${criar?"Primeiro acesso: crie a senha que vai proteger o sistema.":"Digite sua senha para entrar."}</p>
+        <div class="fld"><label for="lp1">${criar?"Nova senha":"Senha"}</label><input id="lp1" type="password" autocomplete="${criar?"new-password":"current-password"}" required></div>
+        ${criar?`<div class="fld"><label for="lp2">Repita a senha</label><input id="lp2" type="password" autocomplete="new-password" required></div>`:""}
+        <p class="lerr" id="lerr">${msg||""}</p><button class="btn primary" type="submit" id="lbtn">${criar?"Criar senha e entrar":"Entrar"}</button></form>`;
+      lp1.focus();
+      lf.onsubmit=async e=>{e.preventDefault();
+        if(criar&&lp1.value!==lp2.value){lerr.textContent="As senhas não são iguais.";return}
+        lbtn.disabled=true;lbtn.textContent="Entrando…";PASS=lp1.value;
+        try{let j=await api(criar?"criarSenha":"login");
+          if(!j.dados.items.length&&!Object.keys(j.dados.dias||{}).length){
+            let li=null,ld={};try{li=JSON.parse(localStorage.getItem("rp_items")||"null");ld=JSON.parse(localStorage.getItem("rp_dias")||"{}")}catch(err){}
+            j=await api("importar",{items:li&&li.length?li:SEED,dias:ld||{}});}
+          cloudMode=true;localMode=false;root.remove();acct.hidden=false;setStore("ok","Salvo na nuvem");applyData(j.dados);
+          setInterval(refreshCloud,30000);document.addEventListener("visibilitychange",refreshCloud);resolve();
+        }catch(err){PASS=null;lbtn.disabled=false;lbtn.textContent=criar?"Criar senha e entrar":"Entrar";lerr.textContent=ERROS[err.erro]||"Não consegui entrar. Tente de novo."}};
+    };
+    step();
+  });
+}
+function openSenha(){
+  modalRoot.innerHTML=`<div class="modal-bg" id="mbg"><form class="modal panel" id="sf"><h3>Trocar senha</h3>
+   <div class="fld"><label for="s1">Nova senha</label><input id="s1" type="password" autocomplete="new-password" required></div>
+   <div class="fld"><label for="s2">Repita a nova senha</label><input id="s2" type="password" autocomplete="new-password" required></div>
+   <p class="lerr" id="serr"></p><div class="actions" style="justify-content:flex-end"><button type="button" class="btn ghost" id="scancel">Cancelar</button><button class="btn primary" type="submit">Salvar senha</button></div></form></div>`;
+  scancel.onclick=closeModal;
+  sf.onsubmit=async e=>{e.preventDefault();if(s1.value!==s2.value){serr.textContent="As senhas não são iguais.";return}
+    try{await api("trocarSenha",{nova:s1.value});PASS=s1.value;closeModal();toast("Senha alterada")}catch(err){serr.textContent=ERROS[err.erro]||"Não consegui trocar a senha."}};
+}
 function persistLocal(){try{localStorage.setItem("rp_items",JSON.stringify(items))}catch(e){}}
 async function saveItem(it){
   const data={...it};delete data.id;
   if(!it.id) it.id="i"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  if(cloudMode){const ix=items.findIndex(x=>x.id===it.id);if(ix>=0)items[ix]={...it};else items.push({...it});render();cloudWrite("upsert",{item:{...it}});return}
   if(localMode){const ix=items.findIndex(x=>x.id===it.id);if(ix>=0)items[ix]={...it};else items.push({...it});persistLocal();render();return}
   try{await col.doc(it.id).set(data)}catch(e){toast("Não consegui salvar: "+(e.message||e.code))}
 }
 async function saveDia(id,patch){
   const cur={...(dias[id]||{}),...patch};dias={...dias,[id]:cur};
+  if(cloudMode){render();cloudWrite("dia",{id,data:cur});return}
   if(localMode){try{localStorage.setItem("rp_dias",JSON.stringify(dias))}catch(e){}render();return}
   render();try{await diasCol.doc(id).set(cur)}catch(e){toast("Não consegui salvar o ponto")}
 }
@@ -373,6 +440,7 @@ function renderPonto(){
     return `<tr><td><b>${br(k)}</b> <span class="muted">${new Date(k+"T12:00").toLocaleDateString("pt-BR",{weekday:"short"})}</span>${hol?` <span class="holn">${esc(hol)}</span>`:""}</td><td><input type="time" data-pd="${k}" data-pk="entrada" value="${esc(d.entrada||"")}" aria-label="Entrada ${br(k)}"></td><td><input type="time" data-pd="${k}" data-pk="saida" value="${esc(d.saida||"")}" aria-label="Saída ${br(k)}"></td><td>${d.manha?`<span class="pill green">enviado ${d.manha}</span>`:`<span class="pill red">não enviado</span>`}</td><td>${d.fim?`<span class="pill green">enviado ${d.fim}</span>`:`<span class="pill red">não enviado</span>`}</td></tr>`}).join("")}</tbody></table></div>`:`<div class="empty" style="margin:14px">Nenhum registro ainda. Coloque sua entrada no Painel e marque o envio do fim do dia.</div>`}</div>`;
 }
 async function removeItem(id){
+  if(cloudMode){items=items.filter(i=>i.id!==id);render();cloudWrite("delete",{id});return}
   if(localMode){items=items.filter(i=>i.id!==id);persistLocal();render();return}
   try{await col.doc(id).delete()}catch(e){toast("Não consegui excluir")}
 }
@@ -486,10 +554,10 @@ function card(it){
       return s}).join("")}</div>`;
   if(it.tipo==="ok") body=`<div class="meta"><span>Concluído em <b>${br(it.okEm)}</b></span></div>`;
   return `<article class="card ${isDone(it)&&it.tipo!=="ok"?"isdone":""}">
-   <div class="card-top"><div><div class="who">${esc(it.reclamante||"Reclamante não informado")}</div><div class="proc">${esc(it.processo||"sem número")}</div></div><span class="pill ${u.cls}">${u.txt}</span></div>
+   <div class="card-top"><div><div class="who">${esc(it.reclamante||it.obs||"Reclamante não informado")}</div><div class="proc">${esc(it.processo||(it.reclamante?"sem número":"tarefa sem processo"))}</div></div><span class="pill ${u.cls}">${u.txt}</span></div>
    ${meta?`<div class="meta">${meta}</div>`:""}
    ${it.quemCobrar?`<div class="meta"><span>Quem cobrar: <b>${esc(it.quemCobrar)}</b></span></div>`:""}
-   ${it.obs?`<p class="obs">${esc(it.obs)}</p>`:""}
+   ${it.obs&&it.reclamante?`<p class="obs">${esc(it.obs)}</p>`:""}
    ${it.assunto?`<div class="assunto"><span><b>Assunto:</b> ${esc(it.assunto)}</span><button class="btn small ghost" data-copy="${esc(it.assunto)}">Copiar</button></div>`:""}
    ${body}
    <div class="actions" style="justify-content:flex-end"><button class="btn small ghost" data-edit="${it.id}">Editar</button><button class="btn small ghost" data-del="${it.id}">Excluir</button></div>
@@ -526,7 +594,9 @@ document.addEventListener("click",e=>{
     if(d.rot==="manha"){saveDia(t,{manha:dia.manha?null:nowHM()});if(!dia.manha)toast("Tarefas da manhã enviadas às "+nowHM())}
     else{const on=!dia.fim;saveDia(t,{fim:on?nowHM():null,saida:on?nowHM():null});toast(on?"Saída registrada às "+nowHM():"Saída removida")}
     return}
-  if(d.v){view=d.v;search="";statFilter=null;render();window.scrollTo({top:0})}
+  if(b.id==="btnSair"){PASS=null;location.reload();return}
+  if(b.id==="btnSenha"){openSenha();return}
+  if(d.v){try{localStorage.setItem("rp_view",d.v)}catch(err){}view=d.v;search="";statFilter=null;render();window.scrollTo({top:0})}
   else if(d.stat){drawer={stat:d.stat};render()}
   else if(d.dclose){drawer=null;render()}
   else if(d.newday)openForm({tipo:"prazo",prazo:d.newday});
@@ -555,9 +625,30 @@ bot("Oi, Le! Me mande prazos, pedidos de documentos ou processos para cadastrar,
 const SYS=`Você organiza tarefas de uma advogada trabalhista brasileira (construtora Pacaembu). Hoje é {HOJE}. Converta o texto em itens JSON.
 Campos de cada item: tipo ("prazo" = prazo/tarefa avulsa como apólice, GRU, montar pasta, avisar alguém; "docs" = solicitação de documentos para montar pasta; "cadastro" = processo novo para cadastrar; "semaud" = processo já cadastrado sem audiência com docs solicitados), reclamante, processo (formato CNJ NNNNNNN-DD.AAAA.J.TR.OOOO), dataSolic, prazo (data de cobrança/prazo interno), fatal (prazo fatal), montarPasta, audiencia (todas as datas em AAAA-MM-DD; sem ano = ano corrente, ou próximo se já passou muito), quemCobrar (nome da pessoa a cobrar/avisar), assunto (assunto do e-mail, exato), obs (observação curta e clara), faltando (lista de documentos faltantes usando apenas: ${CHECKLIST.join("; ")}).
 Se "prazo e fatal no mesmo dia", repita a data. Blocos separados por linhas de traços são itens distintos. Use null para o que não houver.
+LISTA DO DIA: se o texto for uma lista de atividades (marcadores, como a lista enviada no Teams), cada marcador é um item separado: tipo "prazo", prazo = hoje, obs = a atividade escrita de forma clara (sem o número do processo), reclamante e processo se aparecerem, e concluido = hoje se a linha disser FEITO (senão null).
+Todo item "prazo" sem nenhuma data recebe prazo = hoje.`+`
 Responda só JSON: {"itens":[...],"resposta":"frase curta em português"}`;
 
+/* lista de tarefas do dia (a mesma do Teams): cada marcador vira um prazo de hoje; "FEITO" já entra concluído */
+const BULLET=/^\s*(?:[•\-*▪◦·●○➢➤►]|\d+[.)-])\s+/;
+function parseLista(text){
+  const out=[];
+  text.split("\n").forEach(l=>{if(BULLET.test(l))out.push(l.replace(BULLET,"").trim());else if(out.length&&l.trim()&&!/[;.]\s*$/.test(out[out.length-1])&&!/\bfeito\b/i.test(out[out.length-1]))out[out.length-1]+=" "+l.trim()});
+  const t=today();
+  return out.filter(Boolean).map(s=>{
+    const done=/\bfeito\b/i.test(s);
+    const p=s.match(/\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/);
+    const nm=s.match(/((?:[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-zà-ÿ]+)(?:\s+(?:d[aeo]s?\s+|e\s+)?[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-zà-ÿ]+)+)\s*\(\s*\d{7}/);
+    const obs=s.replace(/[;,.]?\s*\bfeito\b\.?/ig,"").replace(/\s*\(\s*\d{7}-[\d.\-]+\s*\)/,"").replace(/[;.\s]+$/,"").trim();
+    let name=nm?nm[1].split(/\s+/):[];
+    const PECAS=/^(embargos?|declaração|contestação|manifestação|recurso|ordinário|revista|réplica|razões|finais|petição|relatório|agravo|instrumento|audiência|pasta|acordo|cálculos?|impugnação|defesa|ata|contrarrazões|memoriais|idpj|exceção|sentença|e|d[aeo]s?)$/i;
+    while(name.length&&PECAS.test(name[0]))name.shift();
+    return {tipo:"prazo",processo:p?p[0]:null,reclamante:name.length>1?name.join(" "):null,obs,prazo:t,concluido:done?t:null};
+  });
+}
 function heuristic(text){
+  const nb=text.split("\n").filter(l=>BULLET.test(l)).length;
+  if(nb>=2&&!/\n\s*-{3,}/.test(text))return parseLista(text);
   const blocks=text.split(/\n\s*-{3,}\s*\n?/).map(s=>s.trim()).filter(Boolean);
   const yr=new Date().getFullYear();
   const toIso=s=>{const m=s.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);if(!m)return null;let y=m[3]?Number(m[3]):yr;if(y<100)y+=2000;return y+"-"+pad(m[2])+"-"+pad(m[1])};
@@ -592,12 +683,14 @@ function propHTML(p,i){
   const dup=d.byProc.length?`<div class="dup">Atenção: processo já cadastrado (${d.byProc.map(x=>TIPOS[x.tipo]+(x.obs?" – "+esc(x.obs.slice(0,40)):"")).join("; ")}).</div>`:d.byName.length?`<div class="dup">Mesmo reclamante em outro processo: ${d.byName.map(x=>esc(x.processo)).join(", ")}.</div>`:"";
   const ds=[["Solic.",p.dataSolic],["Prazo",p.prazo],["Fatal",p.fatal],["Pasta",p.montarPasta],["Aud.",p.audiencia]].filter(x=>x[1]).map(x=>x[0]+" "+brs(x[1])).join(" · ");
   return `<div class="prop" data-pi="${i}"><div class="card-top"><b>${esc(p.reclamante||"Sem reclamante")}</b><select data-ptipo="${i}" aria-label="Campo">${Object.entries(TIPOS).filter(([k])=>k!=="ok").map(([k,v])=>`<option value="${k}" ${p.tipo===k?"selected":""}>${v}</option>`).join("")}</select></div>
-   <span class="proc">${esc(p.processo||"sem número")}</span>${ds?`<span>${ds}</span>`:""}${p.quemCobrar?`<span>Cobrar: <b>${esc(p.quemCobrar)}</b></span>`:""}${p.assunto?`<span class="muted">Assunto: ${esc(p.assunto)}</span>`:""}${p.obs?`<span>${esc(p.obs)}</span>`:""}${(p.faltando||[]).length?`<span>Falta: ${p.faltando.map(esc).join(", ")}</span>`:""}
+   <span class="proc">${esc(p.processo||"sem número")}</span>${ds?`<span>${ds}</span>`:""}${p.quemCobrar?`<span>Cobrar: <b>${esc(p.quemCobrar)}</b></span>`:""}${p.assunto?`<span class="muted">Assunto: ${esc(p.assunto)}</span>`:""}${p.obs?`<span>${esc(p.obs)}</span>`:""}${(p.faltando||[]).length?`<span>Falta: ${p.faltando.map(esc).join(", ")}</span>`:""}${p.concluido?`<span class="pill green" style="align-self:flex-start">Feito</span>`:""}
    ${dup}${dateWarnings([p.dataSolic,p.prazo,p.fatal,p.montarPasta,p.audiencia])}<div class="actions"><button class="btn small primary" data-psave="${i}">Salvar</button><button class="btn small" data-pedit="${i}">Editar</button><button class="btn small ghost" data-pdrop="${i}">Descartar</button></div></div>`;
 }
 composer.onsubmit=async e=>{e.preventDefault();const t=chatIn.value.trim();if(!t)return;me(t);chatIn.value="";sendBtn.disabled=true;
   const w=bot("Lendo…");const r=await interpret(t);sendBtn.disabled=false;
-  const base=pending.length;const its=(r.itens||[]).map(x=>({...x,tipo:TIPOS[x.tipo]?x.tipo:"prazo",faltando:(x.faltando||[]).filter(d=>CHECKLIST.includes(d))}));pending.push(...its);
+  const base=pending.length;const its=(r.itens||[]).map(x=>{const it={...x,tipo:TIPOS[x.tipo]?x.tipo:"prazo",faltando:(x.faltando||[]).filter(d=>CHECKLIST.includes(d))};
+    if(it.tipo==="prazo"&&!it.prazo&&!it.fatal&&!it.montarPasta)it.prazo=today();
+    if(it.concluido&&it.tipo!=="prazo")delete it.concluido;return it});pending.push(...its);
   if(!its.length){w.textContent="Não encontrei nenhuma tarefa nesse texto. Tente incluir o processo ou o reclamante.";return}
   w.innerHTML=`${esc(r.resposta||"Encontrei estes itens:")}<div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;white-space:normal">${its.map((p,k)=>propHTML(p,base+k)).join("")}</div>${its.length>1?`<div class="actions" style="margin-top:8px"><button class="btn small primary" data-psaveall="${base}-${base+its.length}">Salvar todos</button></div>`:""}`;
   msgs.scrollTop=msgs.scrollHeight;
