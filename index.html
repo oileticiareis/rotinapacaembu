@@ -228,6 +228,15 @@ const TIPOS={prazo:"Prazos",docs:"Solicitação de documentos",semaud:"Cadastrad
 const STEPS=[["datajuri","Cadastro no Data Júri"],["contratos","Solicitado contratos"],["documentos","Solicitado documentos"],["pastaRT","Criada pasta de RT"],["pastaSub","Criada pasta de subsídios"],["pauta","Colocado na pauta de audiência"],["audiencia","Cadastrada audiência"]];
 
 let items=[], view="painel", calMonth=null, selDay=null, statFilter=null, docFilter=[], search="";
+/* prazos iniciais: usados só na primeira abertura fora do Claude (GitHub) */
+const SEED=[
+ {id:"kelvy-apolice",tipo:"prazo",processo:"0011785-59.2025.5.15.0027",reclamante:"Kelvy Alves Nunes",obs:"Acompanhar pagamento da apólice solicitada, com o fatal até 04/11.",assunto:"Apólice Seguro Garantia Judicial: Kelvy Alves Nunes - RT 0011785-59.2025.5.15.0027",prazo:"2026-11-03",fatal:"2026-11-04",concluido:null,criadoEm:"2026-11-03T12:00:00.000Z"},
+ {id:"kelvy-gru",tipo:"prazo",processo:"0011785-59.2025.5.15.0027",reclamante:"Kelvy Alves Nunes",obs:"Acompanhar pagamento da GRU (programação de pagamentos), com o fatal até 04/11.",assunto:"Programação de Pagamentos - GRU - Kelvy Alves Nunes - RT 0011785-59.2025.5.15.0027",prazo:"2026-11-03",fatal:"2026-11-04",concluido:null,criadoEm:"2026-11-03T12:00:01.000Z"},
+ {id:"fernando-docs",tipo:"docs",processo:"1001600-06.2026.5.02.0080",reclamante:"Fernando José de Sobral",obs:"Cobrar Solange dos documentos, com prazo até hoje para envio.",quemCobrar:"Solange",prazo:"2026-10-30",fatal:"2026-11-03",enviado:null,faltando:[],criadoEm:"2026-11-03T12:00:02.000Z"},
+ {id:"fernando-pasta",tipo:"prazo",processo:"1001600-06.2026.5.02.0080",reclamante:"Fernando José de Sobral",obs:"Montar pasta e avisar Lary. Pasta urgente!",quemCobrar:"Lary (avisar)",prazo:"2026-11-03",fatal:"2026-11-03",montarPasta:"2026-11-03",concluido:null,criadoEm:"2026-11-03T12:00:03.000Z"},
+ {id:"marcos-docs",tipo:"docs",processo:"0012065-42.2026.5.15.0044",reclamante:"Marcos Antônio Batista da Silva",obs:"Cobrar documentos para montar pasta.",quemCobrar:"Maria Simone",assunto:"SOLICITAÇÃO DE DOCUMENTOS - Processo n° 0012065-42.2026.5.15.0044 – Marcos Antonio Batista da Silva x Alcimes Construtora Ltda",prazo:"2026-11-04",fatal:"2026-11-06",enviado:null,faltando:[],criadoEm:"2026-11-03T12:00:04.000Z"},
+ {id:"leandro-docs",tipo:"docs",processo:"0012493-07.2026.5.15.0082",reclamante:"Leandro Dias de Souza",obs:"Cobrar docs dia 12/11 e montar pasta dia 13/11.",assunto:"SOLICITAÇÃO DE DOCUMENTOS - Processo n° 0012493-07.2026.5.15.0082 - Leandro Dias de Souza x Pacaembu Construtora S.A",dataSolic:"2026-10-13",prazo:"2026-11-12",montarPasta:"2026-11-13",audiencia:"2026-11-26",enviado:null,faltando:[],criadoEm:"2026-11-03T12:00:05.000Z"}
+];
 let col=null, sample=null, localMode=false, diasCol=null, dias={}, itemsLoaded=false, diasLoaded=false, lastPct=null;
 
 /* ---------- datas ---------- */
@@ -304,7 +313,7 @@ async function boot(){
   render();
   let db=null;
   try{db=window.claude?.use?await window.claude.use("db"):null}catch(e){db=null}
-  if(!db){localMode=true;try{items=JSON.parse(localStorage.getItem("rp_items")||"[]");dias=JSON.parse(localStorage.getItem("rp_dias")||"{}")}catch(e){items=[]}
+  if(!db){localMode=true;try{const raw=localStorage.getItem("rp_items");items=raw===null?SEED.map(x=>({...x})):JSON.parse(raw);if(raw===null)persistLocal();dias=JSON.parse(localStorage.getItem("rp_dias")||"{}")}catch(e){items=SEED.map(x=>({...x}))}
     itemsLoaded=diasLoaded=true;setStore("warn","Modo local: salvo só neste navegador");render();}
   else{
     col=db.collection("itens");diasCol=db.collection("dias");
@@ -314,7 +323,7 @@ async function boot(){
     diasCol.onSnapshot(s=>{const m={};s.docs.forEach(d=>m[d.id]=d.data());dias=m;if(!s.metadata.fromCache)diasLoaded=true;render()},e=>{diasLoaded=true});
   }
   try{sample=window.claude?.use?await window.claude.use("sample"):null}catch(e){sample=null}
-  aiMode.textContent=sample?"IA ativa":"Leitura automática (sem IA)";
+  aiMode.textContent=sample?"IA ativa":"Leitura automática ativa";
 }
 function persistLocal(){try{localStorage.setItem("rp_items",JSON.stringify(items))}catch(e){}}
 async function saveItem(it){
@@ -563,9 +572,11 @@ function heuristic(text){
     const mp=b.match(/montar pasta\s+(?:dia\s+)?(\d{1,2}\/\d{1,2})/i);if(mp)it.montarPasta=toIso(mp[1]);
     const cb=b.match(/cobrar\s+docs?\s+(?:dia\s+)?(\d{1,2}\/\d{1,2})/i);if(cb)it.prazo=toIso(cb[1]);
     const as=b.match(/(?:assunto|e-?mail(?:\/assunto)?)\s*:\s*([^\n(]+)/i)||b.match(/^\s*-\s*(Programa[^\n]+)/im);if(as)it.assunto=as[1].trim();
-    const q=b.match(/(?:cobrar|avisar)\s+(?!docs?\b|documentos|dos\b|os\b)([A-ZÁÉÍÓÚÂÊÔÃÕ][\wÀ-ú]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕ][\wÀ-ú]+)?)/);if(q)it.quemCobrar=q[1];
-    const ob=b.match(/observa[çc][õo]es:?\s*\n?([^\n]+)/i);it.obs=ob?ob[1].trim():null;
-    it.tipo=/cadastr/i.test(b)&&!/cadastrei/i.test(b)?"cadastro":/solicit\w* (de )?doc|documentos/i.test(b)&&!/montar pasta e avisar/i.test(b)?"docs":"prazo";
+    const q=b.match(/(?:[Cc]obrar|[Aa]visar)\s+(?!docs?\b|documentos|dos\b|os\b|Docs?\b|Documentos)([A-ZÁÉÍÓÚÂÊÔÃÕ][\wÀ-ú]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕ][\wÀ-ú]+)?)/);if(q)it.quemCobrar=q[1];
+    const ob=b.match(/observa[çc][õo]es:?\s*\n?([^\n]+)/i);
+    it.obs=ob?ob[1].trim():b.split("\n").map(l=>l.trim()).filter(l=>l&&!/\d{7}-\d{2}\./.test(l)&&!/^(recla|processo|assunto|e-?mail|prazo|observa)/i.test(l)).join(" ")||null;
+    it.tipo=/cadastr/i.test(b)&&!/cadastrei/i.test(b)?"cadastro":/solicit|solcit|docs?\b|docu|docue/i.test(b)&&!/montar pasta e avisar/i.test(b)?"docs":"prazo";
+    const so2=b.match(/(?:solicit|solcit)\w*\s+(?:dia\s+)?(\d{1,2}\/\d{1,2})/i);if(so2&&!it.dataSolic)it.dataSolic=toIso(so2[1]);
     return it});
 }
 async function interpret(text){
