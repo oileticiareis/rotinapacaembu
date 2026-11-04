@@ -163,6 +163,15 @@ h2{font-family:var(--display);font-weight:400;font-size:24px;margin:0;text-wrap:
 .chips{display:flex;flex-wrap:wrap;gap:5px}
 .chip{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:3px 9px;font-size:12px}
 .chip.on{background:var(--red-soft);color:var(--red);border-color:transparent;font-weight:600}
+.tag{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;background:var(--accent-soft);color:var(--accent);border-radius:6px;padding:2px 7px;margin-bottom:4px}
+.drop{display:flex;flex-direction:column;align-items:center;gap:4px;padding:26px 16px;border:2px dashed color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface));cursor:pointer;text-align:center}
+.drop.over{background:var(--accent-soft);border-color:var(--accent)}
+.drop b{color:var(--accent);font-size:15px}
+.subtabs{display:flex;gap:6px;flex-wrap:wrap}
+.subtab{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:7px 14px;font-weight:600;color:var(--muted)}
+.subtab[aria-current="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.subtab .n{font-family:var(--mono);font-size:11px;background:var(--surface);color:var(--fg);border-radius:99px;padding:0 6px;margin-left:4px}
+.ask{display:flex;flex-direction:column;gap:10px}
 .chip.f.on{background:var(--accent);color:var(--accent-ink)}
 .muted{color:var(--muted)}
 .empty{padding:22px;text-align:center;color:var(--muted);border:1.5px dashed var(--line);border-radius:12px}
@@ -232,10 +241,12 @@ details summary{cursor:pointer;color:var(--muted);font-weight:600;padding:4px 0}
 
 <script>
 const CHECKLIST=["CTPS","ASOs (admissional e demissional)","Contrato de Trabalho","Acordo/compensação de horas","VT","Ficha de Registro","Ordem de Serviços","Fichas de EPI","Treinamentos/Certificados","Integrações","Transferências","Cartões de Ponto","Holerites","TRCT e comprovante","SEFIPs","Contratos"];
-const TIPOS={prazo:"Prazos",docs:"Solicitação de documentos",semaud:"Cadastrados sem audiência",cadastro:"Processos para cadastrar",ok:"Sem pendências"};
+const TIPOS={prazo:"Prazos",docs:"Solicitação de documentos",pasta:"Montagem de pasta",semaud:"Cadastrados sem audiência",cadastro:"Processos para cadastrar",ok:"Sem pendências"};
+const NEED_FATAL=["prazo","docs","pasta"];
+let docSub="sol";const openFalta=new Set();
 const STEPS=[["datajuri","Cadastro no Data Júri"],["contratos","Solicitado contratos"],["documentos","Solicitado documentos"],["pastaRT","Criada pasta de RT"],["pastaSub","Criada pasta de subsídios"],["pauta","Colocado na pauta de audiência"],["audiencia","Cadastrada audiência"]];
 
-let items=[], view=(()=>{try{const v=localStorage.getItem("rp_view");return ["painel","prazo","docs","semaud","cadastro","ok","ponto"].includes(v)?v:"painel"}catch(e){return "painel"}})(), calMonth=null, selDay=null, statFilter=null, docFilter=[], search="";
+let items=[], view=(()=>{try{const v=localStorage.getItem("rp_view");return ["painel","contato","prazo","docs","semaud","cadastro","ok","ponto"].includes(v)?v:"painel"}catch(e){return "painel"}})(), calMonth=null, selDay=null, statFilter=null, docFilter=[], search="";
 /* prazos iniciais: usados só na primeira abertura fora do Claude (GitHub) */
 const SEED=[
  {id:"kelvy-apolice",tipo:"prazo",processo:"0011785-59.2025.5.15.0027",reclamante:"Kelvy Alves Nunes",obs:"Acompanhar pagamento da apólice solicitada, com o fatal até 04/11.",assunto:"Apólice Seguro Garantia Judicial: Kelvy Alves Nunes - RT 0011785-59.2025.5.15.0027",prazo:"2026-11-03",fatal:"2026-11-04",concluido:null,criadoEm:"2026-11-03T12:00:00.000Z"},
@@ -272,14 +283,35 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 function isDone(it){
   if(it.tipo==="ok") return true;
   if(it.tipo==="prazo") return !!it.concluido;
+  if(it.tipo==="pasta") return !!it.pastaFeita;
   if(it.tipo==="docs"||it.tipo==="semaud") return !!it.enviado;
   return false;
 }
+/* etiqueta do tipo de prazo, para diferenciar vários prazos do mesmo reclamante */
+const CATS=[["Contestação",/contesta/i],["Embargos",/embargo/i],["Recurso",/recurso|contrarraz/i],["Réplica",/r[ée]plica/i],["Razões finais",/raz[õo]es finais/i],["Manifestação",/manifesta/i],["Audiência",/audi[êe]ncia/i],["Apólice",/ap[óo]lice/i],["GRU / pagamento",/\bgru\b|pagamento/i],["Cálculos",/c[áa]lculo/i],["Montar pasta",/montar pasta|montagem/i],["Documentos",/documento|\bdocs?\b/i],["Cadastro",/cadastr/i],["Relatório",/relat[óo]rio/i],["Acordo",/acordo/i]];
+function category(it){
+  const fix={docs:"Documentos",pasta:"Montar pasta",cadastro:"Cadastro",semaud:"Sem audiência",ok:"Sem pendências"};
+  if(fix[it.tipo])return fix[it.tipo];
+  const txt=(it.obs||"")+" "+(it.assunto||"");const c=CATS.find(([,r])=>r.test(txt));return c?c[0]:"Prazo";
+}
+const isWorkday=s=>{const wd=new Date(s+"T12:00").getDay();return wd!==0&&wd!==6&&!holidayOf(s)};
+function prevBizDay(s){let d=addDays(s,-1);while(!isWorkday(d))d=addDays(d,-1);return d}
+/* preenchimento automático: data de solicitação = hoje; cobrar = 1 dia útil antes do fatal */
+function applyDefaults(it){
+  if(!it.dataSolic&&it.tipo!=="ok")it.dataSolic=today();
+  if(it.fatal&&!it.prazo&&NEED_FATAL.includes(it.tipo)){const p=prevBizDay(it.fatal);it.prazo=p<today()?(it.fatal<today()?it.fatal:today()):p}
+  return it;
+}
+function validate(it){
+  if(NEED_FATAL.includes(it.tipo)&&!it.fatal)return "Coloque o prazo fatal para salvar.";
+  if(it.tipo==="docs"&&!(it.faltando||[]).length)return "Marque quais documentos estão faltando para salvar.";
+  return "";
+}
 function events(it){
-  const ev=[], nm=it.reclamante||it.processo||"Sem nome";
-  if(it.prazo) ev.push({d:it.prazo,k:"prazo",t:(it.tipo==="docs"?"Cobrar · ":"Prazo · ")+nm});
-  if(it.fatal) ev.push({d:it.fatal,k:"fatal",t:"Fatal · "+nm});
-  if(it.montarPasta) ev.push({d:it.montarPasta,k:"pasta",t:"Montar pasta · "+nm});
+  const ev=[], nm=it.reclamante||it.obs||it.processo||"Sem nome", cat=category(it), lab=(cat==="Prazo"?"":cat+" · ")+nm;
+  if(it.fatal) ev.push({d:it.fatal,k:"fatal",t:"Fatal · "+lab});
+  else if(it.prazo) ev.push({d:it.prazo,k:"prazo",t:(it.tipo==="docs"?"Cobrar · ":"Prazo · ")+lab});
+  if(it.montarPasta&&it.montarPasta!==it.fatal) ev.push({d:it.montarPasta,k:"pasta",t:"Montar pasta · "+nm});
   if(it.audiencia) ev.push({d:it.audiencia,k:"aud",t:"Audiência · "+nm});
   if(it.tipo==="cadastro"&&!it.prazo&&!it.fatal&&it.criadoEm) ev.push({d:it.criadoEm.slice(0,10),k:"cad",t:"Cadastrar · "+nm});
   if(it.tipo==="semaud"&&it.dataSolic&&!it.prazo&&!it.fatal) ev.push({d:it.dataSolic,k:"cad",t:"Solicitado · "+nm});
@@ -322,12 +354,12 @@ async function boot(){
   let db=null;
   try{db=window.claude?.use?await window.claude.use("db"):null}catch(e){db=null}
   if(!db&&!window.claude){aiMode.textContent="Leitura automática ativa";await startCloud();return}
-  if(!db){localMode=true;try{const raw=localStorage.getItem("rp_items");items=raw===null?SEED.map(x=>({...x})):JSON.parse(raw);if(raw===null)persistLocal();dias=JSON.parse(localStorage.getItem("rp_dias")||"{}")}catch(e){items=SEED.map(x=>({...x}))}
+  if(!db){localMode=true;try{const raw=localStorage.getItem("rp_items");items=raw===null?SEED.map(x=>({...x})):JSON.parse(raw);BASE=JSON.parse(localStorage.getItem("rp_base")||"[]");if(raw===null)persistLocal();dias=JSON.parse(localStorage.getItem("rp_dias")||"{}")}catch(e){items=SEED.map(x=>({...x}))}
     itemsLoaded=diasLoaded=true;setStore("warn","Modo local: salvo só neste navegador");render();}
   else{
     col=db.collection("itens");diasCol=db.collection("dias");
     const timer=setTimeout(()=>setStore("warn","Sem conexão com o banco ainda…"),10000);
-    col.onSnapshot(s=>{items=s.docs.map(d=>({id:d.id,...d.data()}));if(!s.metadata.fromCache){clearTimeout(timer);setStore("ok","Salvo na nuvem");itemsLoaded=true}render()},
+    col.onSnapshot(s=>{setRaw(s.docs.map(d=>({id:d.id,...d.data()})));if(!s.metadata.fromCache){clearTimeout(timer);setStore("ok","Salvo na nuvem");itemsLoaded=true}render()},
       e=>{clearTimeout(timer);setStore("warn","Erro no banco: "+(e.code||""));});
     diasCol.onSnapshot(s=>{const m={};s.docs.forEach(d=>m[d.id]=d.data());dias=m;if(!s.metadata.fromCache)diasLoaded=true;render()},e=>{diasLoaded=true});
   }
@@ -343,7 +375,7 @@ async function api(action,payload={}){
   let j;try{j=await r.json()}catch(e){throw {erro:"resposta"}}
   if(!j.ok)throw j;return j;
 }
-function applyData(d){items=d.items||[];dias=d.dias||{};itemsLoaded=diasLoaded=true;render()}
+function applyData(d){setRaw(d.items||[]);dias=d.dias||{};itemsLoaded=diasLoaded=true;render()}
 async function cloudWrite(action,payload){
   pendingWrites++;setStore("warn","Salvando…");
   try{const j=await api(action,payload);pendingWrites--;setStore("ok","Salvo na nuvem");if(pendingWrites===0&&j.dados)applyData(j.dados)}
@@ -410,7 +442,8 @@ const completedOn=it=>it.concluido||it.enviado||it.okEm||null;
 function dayProgress(){
   const t=today();const due=i=>[i.prazo,i.fatal,i.montarPasta].some(d=>d&&d<=t);
   const L=items.filter(i=>(!isDone(i)&&urgency(i).lvl>=2)||(isDone(i)&&completedOn(i)===t&&due(i)));
-  const dia=dias[t]||{};const total=L.length+2;const done=L.filter(isDone).length+(dia.manha?1:0)+(dia.fim?1:0);
+  const dia=dias[t]||{};const wk=isWorkday(t);const total=L.length+(wk?2:0);const done=L.filter(isDone).length+(wk?(dia.manha?1:0)+(dia.fim?1:0):0);
+  if(!total)return {L,dia,total,done,pct:100};
   return {L,dia,total,done,pct:Math.round(done/total*100)};
 }
 function checkCelebrate(){
@@ -428,18 +461,28 @@ function celebrate(){
     if(++f<170)requestAnimationFrame(tick);else c.remove()})();
 }
 function progCard(){
-  const {L,dia,total,done,pct}=dayProgress();const h=new Date().getHours();
-  const rot=(k,label,late)=>`<button class="check ${dia[k]?"on":""} ${late?"late":""}" data-rot="${k}"><span class="box">${dia[k]?"✓":""}</span>${label}${dia[k]?` <small>${dia[k]}</small>`:""}</button>`;
+  const {L,dia,total,done,pct}=dayProgress();
   return `<section class="prog panel ${pct===100?"full":""}"><div class="prog-top"><div><h3>${pct===100?"Sem pendências hoje!":"Progresso de hoje"}</h3><p>${done} de ${total} tarefas concluídas${pct<100?` · faltam ${total-done}`:""}</p></div><b class="pct">${pct}%</b></div>
    <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
-   <div class="rot">${rot("manha","Manhã: enviar tarefas do dia no Teams",h>=10)}${rot("fim","Fim do dia: enviar o que foi feito, o que não foi e por quê",h>=17)}</div>
    <div class="ponto"><span>Ponto de hoje</span><label for="entrada">Entrada</label><input type="time" id="entrada" value="${esc(dia.entrada||"")}"><span>Saída <b>${dia.saida||"marca ao enviar o relatório do fim do dia"}</b></span><button class="btn small ghost" data-v="ponto">Ver registros</button></div></section>`;
+}
+/* rotina diária do Teams: pendência de todo dia útil (não entra em fim de semana nem feriado) */
+function routinePending(s=today()){if(!isWorkday(s))return 0;const d=dias[s]||{};return (d.manha?0:1)+(d.fim?0:1)}
+function routineCard(k){
+  const t=today(),dia=dias[t]||{},on=!!dia[k];
+  const info=k==="manha"?{t:"Enviar as tarefas do dia no Teams",s:"Rotina diária · manhã",b:"Enviado"}:{t:"Enviar o relatório do fim do dia no Teams",s:"Rotina diária · o que foi feito, o que não foi e por quê",b:"Enviado e registrar saída"};
+  return `<article class="card ${on?"isdone":""}"><div class="card-top"><div><span class="tag">Rotina</span><div class="who">${info.t}</div><div class="proc">${info.s}</div></div><span class="pill ${on?"green":"amber"}">${on?"Concluído":"Hoje"}</span></div>
+   <div class="actions"><button class="check ${on?"on":""}" data-rot="${k}"><span class="box">${on?"✓":""}</span>${info.b}${k==="fim"&&on&&dia.saida?` <small>saída ${dia.saida}</small>`:""}</button></div></article>`;
+}
+function routineHTML(which){
+  const t=today();if(!isWorkday(t))return "";const dia=dias[t]||{};
+  return ["manha","fim"].filter(k=>which==="pend"?!dia[k]:!!dia[k]).map(routineCard).join("");
 }
 function renderPonto(){
   const ks=Object.keys(dias).sort().reverse();
   return `<div class="head"><div><h2>Registro de ponto</h2><p>A saída é gravada quando você marca o envio do fim do dia. A entrada você coloca à mão.</p></div></div>
   <div class="panel">${ks.length?`<div class="tbl-wrap"><table><thead><tr><th>Dia</th><th>Entrada</th><th>Saída</th><th>Tarefas da manhã</th><th>Relatório do fim do dia</th></tr></thead><tbody>${ks.map(k=>{const d=dias[k];const hol=holidayOf(k);
-    return `<tr><td><b>${br(k)}</b> <span class="muted">${new Date(k+"T12:00").toLocaleDateString("pt-BR",{weekday:"short"})}</span>${hol?` <span class="holn">${esc(hol)}</span>`:""}</td><td><input type="time" data-pd="${k}" data-pk="entrada" value="${esc(d.entrada||"")}" aria-label="Entrada ${br(k)}"></td><td><input type="time" data-pd="${k}" data-pk="saida" value="${esc(d.saida||"")}" aria-label="Saída ${br(k)}"></td><td>${d.manha?`<span class="pill green">enviado ${d.manha}</span>`:`<span class="pill red">não enviado</span>`}</td><td>${d.fim?`<span class="pill green">enviado ${d.fim}</span>`:`<span class="pill red">não enviado</span>`}</td></tr>`}).join("")}</tbody></table></div>`:`<div class="empty" style="margin:14px">Nenhum registro ainda. Coloque sua entrada no Painel e marque o envio do fim do dia.</div>`}</div>`;
+    return `<tr><td><b>${br(k)}</b> <span class="muted">${new Date(k+"T12:00").toLocaleDateString("pt-BR",{weekday:"short"})}</span>${hol?` <span class="holn">${esc(hol)}</span>`:""}</td><td><input type="time" data-pd="${k}" data-pk="entrada" value="${esc(d.entrada||"")}" aria-label="Entrada ${br(k)}"></td><td><input type="time" data-pd="${k}" data-pk="saida" value="${esc(d.saida||"")}" aria-label="Saída ${br(k)}"></td><td>${d.manha?`<span class="pill green">enviado</span>`:`<span class="pill red">não enviado</span>`}</td><td>${d.fim?`<span class="pill green">enviado ${d.fim}</span>`:`<span class="pill red">não enviado</span>`}</td></tr>`}).join("")}</tbody></table></div>`:`<div class="empty" style="margin:14px">Nenhum registro ainda. Coloque sua entrada no Painel e marque o envio do fim do dia.</div>`}</div>`;
 }
 async function removeItem(id){
   if(cloudMode){items=items.filter(i=>i.id!==id);render();cloudWrite("delete",{id});return}
@@ -460,8 +503,8 @@ function toggleStep(id,key){
   else{it.checks[key]=it.checks[key]?null:today();if(key==="contratos"&&it.checks.contratos)it.checks.contratosNA=false;if((key==="audiencia"||key==="pauta")&&it.checks[key])it.checks.semAudiencia=false}
   const c=it.checks;
   const base=c.datajuri&&(c.contratos||c.contratosNA)&&c.documentos&&c.pastaRT&&c.pastaSub;
-  if(base&&c.semAudiencia){it.tipo="semaud";it.dataSolic=it.dataSolic||c.documentos;it.enviado=null;saveItem(it);toast("Cadastro completo → Cadastrados sem audiência");return}
-  if(base&&c.pauta&&c.audiencia){it.tipo="ok";it.okEm=today();saveItem(it);toast("Cadastro completo → Sem pendências");return}
+  if(base&&c.semAudiencia){addToBase(it);it.tipo="semaud";it.dataSolic=it.dataSolic||c.documentos;it.enviado=null;saveItem(it);toast("Cadastro completo → Cadastrados sem audiência");return}
+  if(base&&c.pauta&&c.audiencia){addToBase(it);it.tipo="ok";it.okEm=today();saveItem(it);toast("Cadastro completo → Sem pendências");return}
   saveItem(it);
 }
 function toggleFalta(id,doc){
@@ -469,17 +512,116 @@ function toggleFalta(id,doc){
 }
 function copy(txt,btn){navigator.clipboard?.writeText(txt).then(()=>toast("Assunto copiado")).catch(()=>toast("Selecione o texto para copiar"))}
 
+/* ---------- Contato Diário: confere os processos trabalhistas do e-mail com a base de cadastrados ---------- */
+let BASE=[], conf=null, baseQ="", confBusy=false;
+function setRaw(arr){const b=arr.find(x=>x.id==="_base");if(b)BASE=b.lista||[];items=arr.filter(x=>x.id!=="_base")}
+let _bi=null,_bref=null;
+function baseIndex(){if(_bref!==BASE){_bi=new Map(BASE.map(r=>[normProc(r.p),r]));_bref=BASE}return _bi}
+async function saveBase(){
+  const doc={id:"_base",tipo:"_base",lista:BASE,atualizadoEm:new Date().toISOString()};_bref=null;render();
+  if(cloudMode){cloudWrite("upsert",{item:doc});return}
+  if(localMode){try{localStorage.setItem("rp_base",JSON.stringify(BASE))}catch(e){}return}
+  try{const d={...doc};delete d.id;await col.doc("_base").set(d)}catch(e){toast("Não consegui salvar a base")}
+}
+function addToBase(it){
+  if(!it.processo||baseIndex().has(normProc(it.processo)))return;
+  BASE=[...BASE,{p:it.processo,n:it.reclamante||"",t:"Reclamatória Trabalhista",s:"Ativo",em:today()}];saveBase();
+}
+const PDFJS="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",PDFW="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",XLSXJS="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+const _ls={};function loadScript(src){return _ls[src]||(_ls[src]=new Promise((ok,no)=>{const s=document.createElement("script");s.src=src;s.onload=ok;s.onerror=()=>{delete _ls[src];no(new Error("load"))};document.head.appendChild(s)}))}
+async function pdfText(file){
+  await loadScript(PDFJS);await loadScript(PDFW);window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFW;
+  const doc=await window.pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;let out="";
+  for(let p=1;p<=doc.numPages;p++){const tc=await (await doc.getPage(p)).getTextContent();out+=tc.items.map(i=>i.str+(i.hasEOL?"\n":" ")).join("")+"\n"}
+  return out;
+}
+const titleCase=s=>s.toLowerCase().replace(/(^|\s)(\S)/g,(m,a,b)=>a+b.toUpperCase()).replace(/\s(Da|De|Do|Das|Dos|E)\s/g,m=>m.toLowerCase());
+function nomeAtivo(seg){
+  const m=seg.match(/(?:Polo\s+)?Ativo\s*:\s*([\s\S]*?)(?:Polo\s+)?Passivo\s*:/i);if(!m)return "";
+  const parts=m[1].replace(/\s+/g," ").replace(/\([^)]*\)/g,"").split(/,|;|\s\d+\.\s|^\d+\.\s/).map(x=>x.replace(/^\s*\d+\.\s*/,"").replace(/-\.\.\.$|\.\.\.$/,"").trim()).filter(x=>x.length>2);
+  const pessoa=parts.find(x=>!/pacaembu|construtora|ltda|s\.?\s?\/?a\.?$|empreendimento|empresa|fundac|\bme\b|eireli|telegrafos/i.test(x))||parts[0]||"";
+  return pessoa?titleCase(pessoa):"";
+}
+function analisarTexto(text){
+  const re=/(\d{7})-\s*(\d{2})\.\s*(\d{4})\.\s*(\d)\.\s*(\d{2})\.\s*(\d{4})/g;const hits=[];let m;
+  while((m=re.exec(text)))hits.push({num:`${m[1]}-${m[2]}.${m[3]}.${m[4]}.${m[5]}.${m[6]}`,j:m[4],tr:m[5],i:m.index,end:re.lastIndex});
+  const uniq=new Map();
+  hits.forEach((h,k)=>{if(!uniq.has(h.num))uniq.set(h.num,{num:h.num,trab:h.j==="5",trt:"TRT"+Number(h.tr),nome:""});const u=uniq.get(h.num);
+    if(u.trab&&!u.nome){const nx=hits.slice(k+1).find(x=>x.num!==h.num);const seg=text.slice(h.end,Math.min(nx?nx.i:text.length,h.end+1500));u.nome=nomeAtivo(seg)}});
+  const all=[...uniq.values()];
+  const trab=all.filter(x=>x.trab).map(x=>{const b=baseIndex().get(normProc(x.num));const s=items.find(i=>normProc(i.processo)===normProc(x.num));
+    return {...x,status:b?"base":s?"sistema":"novo",baseNome:b?b.n:"",sisTipo:s?s.tipo:"",nome:(b&&b.n)||(s&&s.reclamante)||x.nome||""}});
+  return {total:all.length,outros:all.filter(x=>!x.trab).map(x=>x.num),trab};
+}
+async function conferirArquivos(files){
+  if(!files||!files.length)return;confBusy=true;render();let text="",nomes=[];
+  try{for(const f of files){nomes.push(f.name);text+=await pdfText(f)+"\n"}}
+  catch(e){confBusy=false;render();toast("Não consegui ler o PDF. Tente colar o texto do e-mail.");return}
+  confBusy=false;conf={...analisarTexto(text),arquivo:nomes.join(", "),em:new Date()};render();oferecerTransferencia();
+}
+function conferirTexto(t){if(!t.trim())return;conf={...analisarTexto(t),arquivo:"texto colado",em:new Date()};render();oferecerTransferencia()}
+function oferecerTransferencia(){
+  const novos=(conf&&conf.trab||[]).filter(x=>x.status==="novo");if(!novos.length)return;
+  modalRoot.innerHTML=`<div class="modal-bg" id="mbg"><div class="modal panel ask" role="dialog"><h3>${novos.length===1?"1 processo novo":novos.length+" processos novos"}</h3>
+   <p class="muted" style="margin:0">${novos.length===1?"Este processo trabalhista não está":"Estes processos trabalhistas não estão"} na base de cadastrados. Transferir para <b>Processos para cadastrar</b>?</p>
+   <div class="list">${novos.map(x=>`<label class="check" style="justify-content:flex-start"><input type="checkbox" class="tnovo" value="${esc(x.num)}" checked> <span><b>${esc(x.nome||"Reclamante não identificado")}</b><br><span class="proc">${esc(x.num)} · ${esc(x.trt)}</span></span></label>`).join("")}</div>
+   <div class="actions" style="justify-content:flex-end"><button class="btn ghost" id="tNao">Agora não</button><button class="btn primary" id="tSim">Sim, transferir</button></div></div></div>`;
+  tNao.onclick=closeModal;mbg.onclick=e=>{if(e.target.id==="mbg")closeModal()};
+  tSim.onclick=()=>{const sel=[...document.querySelectorAll(".tnovo:checked")].map(x=>x.value);closeModal();transferir(sel)};
+}
+function transferir(nums){
+  if(!nums.length)return;const d=brs(today());
+  nums.forEach((n,k)=>{const x=conf.trab.find(y=>y.num===n);if(!x||x.status!=="novo")return;
+    saveItem({id:"c"+Date.now().toString(36)+k,tipo:"cadastro",processo:n,reclamante:x.nome||null,obs:`Processo novo do Contato Diário de ${d} (${x.trt}).`,checks:{},criadoEm:new Date().toISOString()});
+    x.status="sistema";x.sisTipo="cadastro"});
+  render();toast(nums.length===1?"Enviado para Processos para cadastrar":`${nums.length} processos enviados para Processos para cadastrar`);
+}
+async function importarExcel(file){
+  if(!file)return;try{await loadScript(XLSXJS)}catch(e){toast("Não consegui abrir o leitor de Excel. Confira a internet.");return}
+  let rows;try{const wb=window.XLSX.read(new Uint8Array(await file.arrayBuffer()),{type:"array"});rows=window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""})}catch(e){toast("Não consegui ler esse arquivo do Excel.");return}
+  const key=(r,re)=>{const k=Object.keys(r).find(k=>re.test(k));return k?String(r[k]).trim():""};
+  const map=new Map(BASE.map(r=>[normProc(r.p),r]));let novos=0;
+  rows.forEach(r=>{const p=key(r,/^processo$/i)||key(r,/processo|n[úu]mero/i);if(!/\d{7}-?\d{2}/.test(p))return;const k=normProc(p);
+    const reg={p,n:key(r,/adverso|reclamante/i),t:key(r,/tipo/i),s:key(r,/status/i)};if(!map.has(k))novos++;map.set(k,{...(map.get(k)||{}),...reg})});
+  if(!map.size){toast("Não encontrei a coluna Processo nesse Excel.");return}
+  BASE=[...map.values()];saveBase();toast(`Base atualizada: ${BASE.length} processos (${novos} novos)`);
+}
+function renderContato(){
+  const st={base:["green","Já cadastrado"],sistema:["blue","Já está no sistema"],novo:["red","Novo"]};
+  let res="";
+  if(confBusy)res=`<div class="panel" style="padding:16px">Lendo o PDF…</div>`;
+  else if(conf){const nNovo=conf.trab.filter(x=>x.status==="novo").length;
+    res=`<div class="panel" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+     <div class="card-top"><div><h3 style="margin:0;font-family:var(--display);font-weight:400;font-size:19px">Resultado da conferência</h3><p class="muted" style="margin:2px 0 0;font-size:12.5px">${esc(conf.arquivo)} · ${conf.total} processos no e-mail · <b>${conf.trab.length} trabalhistas</b> · ${conf.outros.length} de outras áreas (ignorados)</p></div>
+     ${nNovo?`<button class="btn primary small" data-tnovos="1">Transferir ${nNovo} novo${nNovo>1?"s":""}</button>`:`<span class="pill green">Nenhum processo novo</span>`}</div>
+     <div class="list">${conf.trab.length?conf.trab.sort((a,b)=>(a.status==="novo"?0:1)-(b.status==="novo"?0:1)).map(x=>`<div class="card" style="padding:10px 12px;gap:4px"><div class="card-top"><div><span class="tag">Trabalhista · ${esc(x.trt)}</span><div class="who" style="font-size:14px">${esc(x.nome||"Reclamante não identificado")}</div><div class="proc">${esc(x.num)}</div></div><span class="pill ${st[x.status][0]}">${st[x.status][1]}</span></div>
+       ${x.status==="base"&&x.baseNome?`<span class="muted" style="font-size:12px">Na base como: ${esc(x.baseNome)}</span>`:""}${x.status==="sistema"?`<span class="muted" style="font-size:12px">Em: ${esc(TIPOS[x.sisTipo]||"")}</span>`:""}</div>`).join(""):`<div class="empty">Nenhum processo trabalhista neste e-mail.</div>`}</div>
+     ${conf.outros.length?`<details data-fd="outros" ${openFalta.has("outros")?"open":""}><summary>Outras áreas ignoradas (${conf.outros.length})</summary><p class="proc" style="margin:6px 0 0;line-height:1.7">${conf.outros.map(esc).join(" · ")}</p></details>`:""}</div>`}
+  const q=normName(baseQ),qd=normProc(baseQ);
+  const found=q?BASE.filter(r=>normName(r.n).includes(q)||(qd.length>=4&&normProc(r.p).includes(qd))).slice(0,40):[];
+  return `<div class="head"><div><h2>Contato Diário</h2><p>Envie o PDF do e-mail. O sistema separa os processos trabalhistas e confere com a base de cadastrados.</p></div></div>
+  <label class="drop panel" id="drop" for="pdfIn"><b>Clique para escolher o PDF</b><span class="muted">ou arraste o arquivo aqui · pode ser mais de um</span><input type="file" id="pdfIn" accept="application/pdf,.pdf" multiple hidden></label>
+  <details data-fd="colar" ${openFalta.has("colar")?"open":""}><summary>Ou cole o texto do e-mail</summary><div class="ask" style="margin-top:8px"><textarea id="confTxt" class="search" rows="5" placeholder="Cole aqui o texto do e-mail do Contato Diário"></textarea><button class="btn primary small" data-conftxt="1" style="align-self:flex-start">Conferir texto</button></div></details>
+  ${res}
+  <div class="panel" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+   <div class="card-top"><div><h3 style="margin:0;font-family:var(--display);font-weight:400;font-size:19px">Base de processos cadastrados</h3><p class="muted" style="margin:2px 0 0;font-size:12.5px">${BASE.length?`${BASE.length} processos. Os cadastros que você concluir entram aqui sozinhos.`:"Ainda vazia. Importe o Excel de processos para começar."}</p></div>
+   <label class="btn small" for="xlsIn" style="cursor:pointer">${BASE.length?"Atualizar com Excel":"Importar Excel"}<input type="file" id="xlsIn" accept=".xls,.xlsx,.csv" hidden></label></div>
+   ${BASE.length?`<input class="search" id="baseSearch" placeholder="Buscar na base por número ou nome" value="${esc(baseQ)}">
+   ${q?`<div class="list">${found.length?found.map(r=>`<div class="meta" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0"><span><b>${esc(r.n||"—")}</b></span><span class="proc">${esc(r.p)}${r.s?" · "+esc(r.s):""}</span></div>`).join(""):`<div class="empty">Não está na base.</div>`}</div>`:""}`:""}
+  </div>`;
+}
+
 /* ---------- render ---------- */
-const NAV=[["painel","Painel e calendário"],["prazo",TIPOS.prazo],["docs",TIPOS.docs],["semaud",TIPOS.semaud],["cadastro",TIPOS.cadastro],["ok",TIPOS.ok],["ponto","Registro de ponto"]];
+const NAV=[["painel","Painel e calendário"],["contato","Contato Diário"],["prazo",TIPOS.prazo],["docs","Documentos e pastas"],["semaud",TIPOS.semaud],["cadastro",TIPOS.cadastro],["ok",TIPOS.ok],["ponto","Registro de ponto"]];
 function render(){
-  tabs.innerHTML=NAV.map(([k,l])=>{const n=k==="painel"?dayProgress().pct+"%":k==="ponto"?Object.keys(dias).length:items.filter(i=>i.tipo===k&&(k==="ok"||!isDone(i))).length;
-    return `<button class="tab" data-v="${k}" aria-current="${view===k}"><span>${l}</span><span class="n">${n}</span></button>`}).join("");
-  main.innerHTML=view==="painel"?renderPainel():view==="ponto"?renderPonto():renderLista(view);
+  tabs.innerHTML=NAV.map(([k,l])=>{const n=k==="painel"?dayProgress().pct+"%":k==="ponto"||k==="contato"?null:k==="docs"?items.filter(i=>(i.tipo==="docs"||i.tipo==="pasta")&&!isDone(i)).length:items.filter(i=>i.tipo===k&&(k==="ok"||!isDone(i))).length;
+    return `<button class="tab" data-v="${k}" aria-current="${view===k}"><span>${l}</span>${n===null?"":`<span class="n">${n}</span>`}</button>`}).join("");
+  main.innerHTML=view==="painel"?renderPainel():view==="ponto"?renderPonto():view==="contato"?renderContato():view==="docs"?renderDocs():renderLista(view);
   renderDrawer();checkCelebrate();
 }
 function statsBar(){
-  return `<div class="stats">${STATS.map(([k,l,c,f])=>{const L=items.filter(f);const names=[...new Set(L.map(i=>(i.reclamante||"").split(" ")[0]).filter(Boolean))].join(", ");
-    return `<button class="stat ${L.length?"":"zero"}" style="--c:${c}" data-stat="${k}" aria-pressed="${drawer&&drawer.stat===k}"><b>${pad(L.length)}</b><span>${l}</span><small>${L.length?esc(names):"nada pendente"}</small></button>`}).join("")}</div>`;
+  return `<div class="stats">${STATS.map(([k,l,c,f])=>{const L=items.filter(f);const rp=k==="hoje"?routinePending():0;const names=[...(rp?["Teams"]:[]),...new Set(L.map(i=>(i.reclamante||"").split(" ")[0]).filter(Boolean))].join(", ");const n=L.length+rp;
+    return `<button class="stat ${n?"":"zero"}" style="--c:${c}" data-stat="${k}" aria-pressed="${drawer&&drawer.stat===k}"><b>${pad(n)}</b><span>${l}</span><small>${n?esc(names):"nada pendente"}</small></button>`}).join("")}</div>`;
 }
 const EVC={fatal:"var(--red)",prazo:"var(--amber)",pasta:"var(--blue)",aud:"var(--green)",cad:"var(--muted)"};
 let drawer=null;
@@ -489,19 +631,22 @@ function renderDrawer(){
   if(drawer.day){const s=drawer.day;title=new Date(s+"T12:00").toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"});
     const ev=items.flatMap(events).filter(e=>e.d===s);
     const G=[["fatal","Prazo fatal"],["prazo","Prazos e cobranças"],["pasta","Montar pasta"],["aud","Audiências"],["cad","Cadastros e solicitações"]];
-    const used=new Set();
-    G.forEach(([k,l])=>{const its=[...new Set(ev.filter(e=>e.k===k&&!e.done).map(e=>e.it))].filter(i=>!used.has(i));its.forEach(i=>used.add(i));if(its.length)groups.push([l,its])});
-    if(s===t){const late=items.filter(i=>urgency(i).lvl===4&&!ev.some(e=>e.it===i));if(late.length)groups.unshift(["Vencidos (de dias anteriores)",late])}
-    const feitos=[...new Set(ev.filter(e=>e.done).map(e=>e.it))];
-    const nOpen=new Set(groups.flatMap(g=>g[1])).size;
-    if(feitos.length)groups.push([`Concluídos (${feitos.length})`,feitos]);
-    sub=nOpen||feitos.length?`${nOpen} ${nOpen===1?"pendente":"pendentes"} · ${feitos.length} ${feitos.length===1?"concluído":"concluídos"}`:"Nenhum prazo ou tarefa neste dia.";
+    const used=new Set();const H=its=>its.sort(sortItems).map(card).join("");
+    G.forEach(([k,l])=>{const its=[...new Set(ev.filter(e=>e.k===k&&!e.done).map(e=>e.it))].filter(i=>!used.has(i));its.forEach(i=>used.add(i));if(its.length)groups.push([l,H(its),its.length])});
+    const cob=items.filter(i=>i.prazo===s&&i.fatal&&i.fatal!==s&&!isDone(i)&&!used.has(i));if(cob.length)groups.push(["Cobrar neste dia (fatal depois)",H(cob),cob.length]);
+    if(s===t){const late=items.filter(i=>urgency(i).lvl===4&&!ev.some(e=>e.it===i)&&!cob.includes(i));if(late.length)groups.unshift(["Vencidos (de dias anteriores)",H(late),late.length]);
+      const rp=routineHTML("pend");if(rp)groups.unshift(["Rotina do dia",rp,routinePending()]);}
+    const feitos=[...new Set(ev.filter(e=>e.done).map(e=>e.it))];const rd=s===t?routineHTML("done"):"";const nrd=s===t&&isWorkday(t)?2-routinePending():0;
+    const nOpen=groups.reduce((a,g)=>a+g[2],0),nDone=feitos.length+nrd;
+    if(nDone)groups.push([`Concluídos (${nDone})`,rd+H(feitos),nDone]);
+    sub=nOpen||nDone?`${nOpen} ${nOpen===1?"pendente":"pendentes"} · ${nDone} ${nDone===1?"concluído":"concluídos"}`:"Nenhum prazo ou tarefa neste dia.";
     const hol=holidayOf(s);if(hol)sub=`<span class="holn" style="font-size:13px">Feriado: ${esc(hol)}</span><br>`+sub;}
-  else{const st=STATS.find(x=>x[0]===drawer.stat);title=st[1];const L=items.filter(st[3]).sort(sortItems);groups=L.length?[["",L]]:[];sub=L.length?`${L.length} ${L.length>1?"itens":"item"}`:"Nada aqui.";}
+  else{const st=STATS.find(x=>x[0]===drawer.stat);title=st[1];const L=items.filter(st[3]).sort(sortItems);const rp=drawer.stat==="hoje"?routineHTML("pend"):"";
+    groups=L.length||rp?[["",rp+L.map(card).join(""),0]]:[];const n=L.length+(drawer.stat==="hoje"?routinePending():0);sub=n?`${n} ${n>1?"itens":"item"}`:"Nada aqui.";}
   dayRoot.innerHTML=`<div class="drawer-bg" id="dbg"><div class="drawer" role="dialog" aria-label="${esc(title)}">
    <div class="card-top"><div><h3>${esc(title)}</h3><p class="muted" style="margin:2px 0 0">${sub}</p></div><button class="btn small" data-dclose="1">Fechar</button></div>
    ${drawer.day?`<div class="actions"><button class="btn small primary" data-newday="${drawer.day}">+ Tarefa neste dia</button></div>`:""}
-   ${groups.map(([l,its])=>`${l?`<div class="grp">${esc(l)}</div>`:""}<div class="list">${its.sort(sortItems).map(card).join("")}</div>`).join("")}
+   ${groups.map(([l,html])=>`${l?`<div class="grp">${esc(l)}</div>`:""}<div class="list">${html}</div>`).join("")}
   </div></div>`;
   dbg.onclick=e=>{if(e.target.id==="dbg"){drawer=null;render()}};
 }
@@ -514,8 +659,9 @@ function renderPainel(){
     const hol=holidayOf(s);
     cells+=`<button class="day ${s.slice(0,7)!==calMonth?"out":""} ${s===t?"today":""} ${s===selDay?"sel":""} ${hol?"hol":""}" data-day="${s}"><span style="display:flex;align-items:center"><span class="dn">${d.getDate()}</span>${ev.length?`<span class="cnt">${ev.length}</span>`:""}</span>${hol?`<span class="holn">${esc(hol)}</span>`:""}${ev.slice(0,3).map(e=>`<span class="ev ${e.k} ${e.done?"done":""}">${esc(e.t)}</span>`).join("")}${ev.length>3?`<span class="more">+${ev.length-3}</span>`:""}</button>`}
   const mName=first.toLocaleDateString("pt-BR",{month:"long",year:"numeric"});
-  const hoje=items.filter(i=>urgency(i).lvl>=2).sort(sortItems);
-  const side=`<h4>Para hoje</h4><p class="muted" style="margin:-6px 0 0;font-size:12px">Vencidos, fatais e prazos do dia</p>${hoje.length?hoje.map(card).join(""):`<div class="empty">Tudo em dia hoje.</div>`}`;
+  const hojeL=items.filter(i=>urgency(i).lvl>=2).sort(sortItems);const rpN=routinePending();
+  const hoje={length:hojeL.length+rpN};
+  const side=`<h4>Para hoje</h4><p class="muted" style="margin:-6px 0 0;font-size:12px">Rotina do Teams, vencidos, fatais e cobranças do dia</p>${hoje.length?routineHTML("pend")+hojeL.map(card).join(""):`<div class="empty">Tudo em dia hoje.</div>`}${routineHTML("done")}`;
   let week="";for(let i=0;i<7;i++){const s=addDays(t,i);const ev=allEv.filter(e=>e.d===s&&!e.done);const dd=new Date(s+"T12:00");
     const hol=holidayOf(s);
     week+=`<button class="wd ${i===0?"today":""} ${hol?"wdhol":""}" data-day="${s}"><span class="wl">${i===0?"Hoje":i===1?"Amanhã":dd.toLocaleDateString("pt-BR",{weekday:"short"}).replace(".","")}</span><span class="wn">${pad(dd.getDate())}</span>${hol?`<span class="holn">${esc(hol)}</span>`:""}<span class="dots">${ev.map(e=>`<i style="background:${EVC[e.k]}" title="${esc(e.t)}"></i>`).join("")||`<span class="muted" style="font-size:11px">livre</span>`}</span></button>`}
@@ -526,7 +672,7 @@ function renderPainel(){
   <div class="week">${week}</div>
   <div class="cal-wrap"><div class="panel"><div class="cal-top"><h3>${mName}</h3><div class="actions"><button class="btn small" data-cal="-1" aria-label="Mês anterior">‹</button><button class="btn small" data-cal="0">Hoje</button><button class="btn small" data-cal="1" aria-label="Próximo mês">›</button></div></div>
   <div class="cal-scroll"><div class="cal">${["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"].map(d=>`<div class="dow">${d}</div>`).join("")}${cells}</div></div>
-  <div class="legend"><span><i style="background:var(--red)"></i>Fatal</span><span><i style="background:var(--amber)"></i>Prazo / cobrar</span><span><i style="background:var(--blue)"></i>Montar pasta</span><span><i style="background:var(--green)"></i>Audiência</span><span><i style="background:var(--line)"></i>Cadastro / solicitação</span></div></div>
+  <div class="legend"><span><i style="background:var(--red)"></i>Fatal</span><span><i style="background:var(--amber)"></i>Prazo sem fatal</span><span><i style="background:var(--blue)"></i>Montar pasta</span><span><i style="background:var(--green)"></i>Audiência</span><span><i style="background:var(--line)"></i>Cadastro / solicitação</span></div></div>
   <div class="panel daylist">${side}</div></div>`;
 }
 function miniCard(it){const u=urgency(it);
@@ -542,7 +688,24 @@ function renderLista(tipo){
   <input class="search" id="search" placeholder="Buscar por reclamante, processo, assunto ou pessoa" value="${esc(search)}">
   ${filt}
   <div class="list">${open.length?open.map(card).join(""):`<div class="empty">${search||docFilter.length?"Nenhum resultado para esse filtro.":"Nada por aqui ainda. Use o Assistente ou “+ Adicionar”."}</div>`}</div>
-  ${done.length?`<details><summary>${tipo==="prazo"?"Concluídos":"Enviados"} (${done.length})</summary><div class="list" style="margin-top:8px">${done.map(card).join("")}</div></details>`:""}`;
+  ${done.length?`<details data-fd="done-${tipo}" ${openFalta.has("done-"+tipo)?"open":""}><summary>${tipo==="prazo"?"Concluídos":"Enviados"} (${done.length})</summary><div class="list" style="margin-top:8px">${done.sort(sortItems).map(card).join("")}</div></details>`:""}`;
+}
+function renderDocs(){
+  const q=normName(search);const match=i=>!q||normName(i.reclamante+" "+i.processo+" "+(i.assunto||"")+" "+(i.quemCobrar||"")).includes(q)||normProc(i.processo).includes(normProc(search)||"#");
+  const sol=items.filter(i=>i.tipo==="docs"&&match(i)).filter(i=>!docFilter.length||docFilter.every(d=>(i.faltando||[]).includes(d))).sort(sortItems);
+  const mont=items.filter(i=>i.tipo==="pasta"&&!i.pastaFeita&&match(i)).sort(sortItems);
+  const feitas=items.filter(i=>i.tipo==="pasta"&&i.pastaFeita&&match(i)).sort((a,b)=>a.pastaFeita<b.pastaFeita?1:-1);
+  const sub=[["sol","Solicitações",sol.length],["pasta","Montagem de pasta",mont.length],["feitas","Pastas feitas",null]];
+  const desc={sol:"Documentos que você pediu. Ao marcar Enviado, o sistema pergunta se chegou tudo.",pasta:"Documentos completos: falta montar a pasta. Marque quando a pasta estiver pronta.",feitas:"Pastas concluídas, com a data em que você terminou."}[docSub];
+  let body;
+  if(docSub==="sol")body=`<div class="panel filters"><label>Filtrar por documento faltante</label><div class="chips">${CHECKLIST.map(d=>`<button class="chip f ${docFilter.includes(d)?"on":""}" data-df="${esc(d)}">${esc(d)}</button>`).join("")}</div></div>
+    <div class="list">${sol.length?sol.map(card).join(""):`<div class="empty">${search||docFilter.length?"Nenhum resultado para esse filtro.":"Nenhuma solicitação aberta."}</div>`}</div>`;
+  else if(docSub==="pasta")body=`<div class="list">${mont.length?mont.map(card).join(""):`<div class="empty">Nenhuma pasta para montar agora.</div>`}</div>`;
+  else body=`<div class="panel">${feitas.length?`<div class="tbl-wrap"><table style="min-width:0"><thead><tr><th>Reclamante</th><th>Pasta concluída em</th><th></th></tr></thead><tbody>${feitas.map(i=>`<tr><td><b>${esc(i.reclamante||i.processo||"—")}</b></td><td>${br(i.pastaFeita)}</td><td style="text-align:right"><button class="btn small ghost" data-tf="pastaFeita" data-id="${i.id}">Desfazer</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="empty" style="margin:14px">Nenhuma pasta concluída ainda.</div>`}</div>`;
+  return `<div class="head"><div><h2>Documentos e pastas</h2><p>${desc}</p></div>${docSub!=="feitas"?`<button class="btn primary" data-new="${docSub==="sol"?"docs":"pasta"}">+ Adicionar</button>`:""}</div>
+  <div class="subtabs">${sub.map(([k,l,n])=>`<button class="subtab" data-sub="${k}" aria-current="${docSub===k}">${l}${n?` <span class="n">${n}</span>`:""}</button>`).join("")}</div>
+  <input class="search" id="search" placeholder="Buscar por reclamante, processo, assunto ou pessoa" value="${esc(search)}">
+  ${body}`;
 }
 function chk(on,label,attrs,alt){return `<button class="check ${alt?"alt":""} ${on?"on":""}" ${attrs}><span class="box">${on?"✓":""}</span>${label}${on&&typeof on==="string"?` <small>${brs(on)}</small>`:""}</button>`}
 function card(it){
@@ -550,8 +713,9 @@ function card(it){
   const meta=[["Solicitado",it.dataSolic],["Prazo",it.prazo],["Fatal",it.fatal],["Montar pasta",it.montarPasta],["Audiência",it.audiencia]].filter(x=>x[1]).map(([l,v])=>`<span>${l}: <b>${br(v)}</b></span>`).join("");
   let body="";
   if(it.tipo==="prazo") body=`<div class="actions">${chk(it.concluido,"Concluído",`data-tf="concluido" data-id="${it.id}"`)}</div>`;
-  if(it.tipo==="docs"||it.tipo==="semaud") body=`<div class="actions">${chk(it.enviado,"Enviado",`data-tf="enviado" data-id="${it.id}"`)}</div>`;
-  if(it.tipo==="docs") body+=`<details ${(it.faltando||[]).length?"":""}><summary>Documentos faltando (${(it.faltando||[]).length})</summary><div class="chips" style="margin-top:6px">${CHECKLIST.map(d=>`<button class="chip ${(it.faltando||[]).includes(d)?"on":""}" data-falta="${esc(d)}" data-id="${it.id}">${esc(d)}</button>`).join("")}</div></details>`;
+  if(it.tipo==="docs"||it.tipo==="semaud") body=`<div class="actions">${chk(it.enviado,"Enviado",`data-enviado="${it.id}"`)}</div>`;
+  if(it.tipo==="pasta") body=`<div class="meta"><span>Documentos completos em <b>${br(it.recebidoEm||it.enviado)}</b></span></div><div class="actions">${chk(it.pastaFeita,"Pasta montada",`data-tf="pastaFeita" data-id="${it.id}"`)}</div>`;
+  if(it.tipo==="docs") body+=`<details data-fd="${it.id}" ${openFalta.has(it.id)?"open":""}><summary>Documentos faltando (${(it.faltando||[]).length})</summary><div class="chips" style="margin-top:6px">${CHECKLIST.map(d=>`<button class="chip ${(it.faltando||[]).includes(d)?"on":""}" data-falta="${esc(d)}" data-id="${it.id}">${esc(d)}</button>`).join("")}</div></details>`;
   if((it.faltando||[]).length&&it.tipo==="docs") body=`<div class="meta"><span>Falta: <b>${it.faltando.map(esc).join(", ")}</b></span></div>`+body;
   if(it.tipo==="cadastro") body=`<div class="steps">${STEPS.map(([k,l])=>{
       let s=chk(c[k],l,`data-step="${k}" data-id="${it.id}"`);
@@ -560,7 +724,7 @@ function card(it){
       return s}).join("")}</div>`;
   if(it.tipo==="ok") body=`<div class="meta"><span>Concluído em <b>${br(it.okEm)}</b></span></div>`;
   return `<article class="card ${isDone(it)&&it.tipo!=="ok"?"isdone":""}">
-   <div class="card-top"><div><div class="who">${esc(it.reclamante||it.obs||"Reclamante não informado")}</div><div class="proc">${esc(it.processo||(it.reclamante?"sem número":"tarefa sem processo"))}</div></div><span class="pill ${u.cls}">${u.txt}</span></div>
+   <div class="card-top"><div><span class="tag">${esc(category(it))}</span><div class="who">${esc(it.reclamante||it.obs||"Reclamante não informado")}</div><div class="proc">${esc(it.processo||(it.reclamante?"sem número":"tarefa sem processo"))}</div></div><span class="pill ${u.cls}">${u.txt}</span></div>
    ${meta?`<div class="meta">${meta}</div>`:""}
    ${it.quemCobrar?`<div class="meta"><span>Quem cobrar: <b>${esc(it.quemCobrar)}</b></span></div>`:""}
    ${it.obs&&it.reclamante?`<p class="obs">${esc(it.obs)}</p>`:""}
@@ -571,33 +735,52 @@ function card(it){
 }
 
 /* ---------- modal ---------- */
-function openForm(it,onSave){
+function openForm(it,onSave,msg){
   it=it?clone(it):{tipo:"prazo"};
-  const f=(k,l,type="date")=>`<div class="fld"><label for="f_${k}">${l}</label><input id="f_${k}" type="${type}" value="${esc(it[k]||"")}"></div>`;
-  modalRoot.innerHTML=`<div class="modal-bg" id="mbg"><form class="modal panel" id="mform"><h3>${it.id?"Editar":"Novo item"}</h3>
+  if(!it.id&&!it.dataSolic&&it.tipo!=="ok")it.dataSolic=today();
+  const falt=new Set(it.faltando||[]);
+  const f=(k,l,type="date",hint)=>`<div class="fld"><label for="f_${k}">${l}${hint?` <span style="font-weight:400">· ${hint}</span>`:""}</label><input id="f_${k}" type="${type}" value="${esc(it[k]||"")}"></div>`;
+  modalRoot.innerHTML=`<div class="modal-bg" id="mbg"><form class="modal panel" id="mform" novalidate><h3>${it.id?"Editar":"Novo item"}</h3>
    <div class="fld"><label for="f_tipo">Campo</label><select id="f_tipo">${Object.entries(TIPOS).map(([k,v])=>`<option value="${k}" ${it.tipo===k?"selected":""}>${v}</option>`).join("")}</select></div>
    <div class="grid2">${f("reclamante","Reclamante","text")}${f("processo","Nº do processo","text")}</div>
-   <div class="grid2">${f("dataSolic","Data da solicitação")}${f("prazo","Prazo (cobrar)")}${f("fatal","Prazo fatal")}${f("montarPasta","Montar pasta em")}${f("audiencia","Audiência")}${f("quemCobrar","Quem cobrar","text")}</div>
+   <div class="grid2">${f("dataSolic","Data da solicitação","date","hoje, se não mudar")}${f("fatal","Prazo fatal *")}${f("prazo","Cobrar em","date","vazio = 1 dia útil antes do fatal")}${f("montarPasta","Montar pasta em")}${f("audiencia","Audiência")}${f("quemCobrar","Quem cobrar","text")}</div>
+   <div class="fld" id="fFaltaWrap"><label>Documentos faltando *</label><div class="chips" id="fFalta">${CHECKLIST.map(d=>`<button type="button" class="chip ${falt.has(d)?"on":""}" data-ff="${esc(d)}">${esc(d)}</button>`).join("")}</div></div>
    ${f("assunto","Assunto do e-mail","text")}
    <div class="fld"><label for="f_obs">Observações</label><textarea id="f_obs" rows="3">${esc(it.obs||"")}</textarea></div>
-   <div id="fdup"></div>
+   <div id="fdup"></div><p class="lerr" id="ferr">${esc(msg||"")}</p>
    <div class="actions" style="justify-content:flex-end"><button type="button" class="btn ghost" id="mcancel">Cancelar</button><button class="btn primary" type="submit">Salvar</button></div></form></div>`;
+  const syncTipo=()=>{fFaltaWrap.hidden=f_tipo.value!=="docs"};f_tipo.onchange=syncTipo;syncTipo();
+  fFalta.onclick=e=>{const c=e.target.closest("[data-ff]");if(!c)return;const d=c.dataset.ff;falt.has(d)?falt.delete(d):falt.add(d);c.classList.toggle("on",falt.has(d))};
   const upd=()=>{const p={processo:f_processo.value,reclamante:f_reclamante.value};const d=findDups(p);const others=x=>x.filter(i=>i.id!==it.id);
     const a=others(d.byProc),b=others(d.byName);fdup.innerHTML=(a.length||b.length?`<div class="dup">${a.length?`Já existe ${a.length} item com este processo (${a.map(i=>TIPOS[i.tipo]).join(", ")}).`:""} ${b.length?`Mesmo reclamante em outro processo: ${b.map(i=>esc(i.processo)).join(", ")}.`:""}</div>`:"")
       +dateWarnings(["dataSolic","prazo","fatal","montarPasta","audiencia"].map(k=>document.getElementById("f_"+k).value))};
   f_processo.oninput=upd;f_reclamante.oninput=upd;["dataSolic","prazo","fatal","montarPasta","audiencia"].forEach(k=>document.getElementById("f_"+k).addEventListener("input",upd));upd();
   mcancel.onclick=closeModal;mbg.onclick=e=>{if(e.target.id==="mbg")closeModal()};
   mform.onsubmit=e=>{e.preventDefault();["tipo","reclamante","processo","dataSolic","prazo","fatal","montarPasta","audiencia","quemCobrar","assunto","obs"].forEach(k=>it[k]=document.getElementById("f_"+k).value.trim()||null);
-    if(!it.criadoEm)it.criadoEm=new Date().toISOString();closeModal();(onSave||saveItem)(it);toast("Salvo em "+TIPOS[it.tipo])};
+    if(it.tipo==="docs")it.faltando=CHECKLIST.filter(d=>falt.has(d));
+    const err=validate(it);if(err){ferr.textContent=err;(it.fatal?fFaltaWrap:f_fatal).scrollIntoView({block:"center",behavior:"smooth"});if(!it.fatal)f_fatal.focus();return}
+    applyDefaults(it);if(!it.criadoEm)it.criadoEm=new Date().toISOString();closeModal();(onSave||saveItem)(it);toast("Salvo em "+TIPOS[it.tipo])};
 }
 function closeModal(){modalRoot.innerHTML=""}
+/* ao marcar Enviado: pergunta se chegou tudo; se sim, vai para Montagem de pasta */
+function askEnviado(id){
+  const it0=items.find(i=>i.id===id);if(!it0)return;
+  if(it0.enviado){const it=clone(it0);it.enviado=null;saveItem(it);toast("Desmarcado");return}
+  modalRoot.innerHTML=`<div class="modal-bg" id="mbg"><div class="modal panel ask" role="dialog"><h3>Chegaram todos os documentos?</h3>
+   <p class="muted" style="margin:0">${esc(it0.reclamante||it0.processo||"")}${(it0.faltando||[]).length?` · faltavam: ${it0.faltando.map(esc).join(", ")}`:""}</p>
+   <div class="actions" style="justify-content:flex-end"><button class="btn ghost" id="aCancel">Cancelar</button><button class="btn" id="aNao">Não, ainda falta</button><button class="btn primary" id="aSim">Sim, temos tudo</button></div></div></div>`;
+  aCancel.onclick=closeModal;mbg.onclick=e=>{if(e.target.id==="mbg")closeModal()};
+  aNao.onclick=()=>{closeModal();openFalta.add(id);if(view==="docs")docSub="sol";render();toast("Atualize o que ainda falta")};
+  aSim.onclick=()=>{const it=clone(it0);it.tipo="pasta";it.enviado=today();it.recebidoEm=today();it.faltando=[];it.pastaFeita=null;closeModal();saveItem(it);toast("Movido para Montagem de pasta")};
+}
+document.addEventListener("toggle",e=>{const el=e.target;if(el.dataset&&el.dataset.fd){el.open?openFalta.add(el.dataset.fd):openFalta.delete(el.dataset.fd)}},true);
 let tt;function toast(m){clearTimeout(tt);let el=document.querySelector(".toast");if(!el){el=document.createElement("div");el.className="toast";document.body.appendChild(el)}el.textContent=m;tt=setTimeout(()=>el.remove(),2600)}
 
 /* ---------- eventos ---------- */
 document.addEventListener("click",e=>{
   const b=e.target.closest("button");if(!b)return;const d=b.dataset;
   if(d.rot){const t=today(),dia=dias[t]||{};
-    if(d.rot==="manha"){saveDia(t,{manha:dia.manha?null:nowHM()});if(!dia.manha)toast("Tarefas da manhã enviadas às "+nowHM())}
+    if(d.rot==="manha"){saveDia(t,{manha:dia.manha?null:true});toast(dia.manha?"Desmarcado":"Tarefas do dia enviadas")}
     else{const on=!dia.fim;saveDia(t,{fim:on?nowHM():null,saida:on?nowHM():null});toast(on?"Saída registrada às "+nowHM():"Saída removida")}
     return}
   if(b.id==="btnSair"){PASS=null;location.reload();return}
@@ -608,6 +791,10 @@ document.addEventListener("click",e=>{
   else if(d.newday)openForm({tipo:"prazo",prazo:d.newday});
   else if(d.cal!==undefined){if(d.cal==="0"){calMonth=today().slice(0,7);selDay=today()}else{const[y,m]=calMonth.split("-").map(Number);const n=new Date(y,m-1+Number(d.cal),1);calMonth=iso(n).slice(0,7)}render()}
   else if(d.day){selDay=d.day;drawer={day:d.day};render()}
+  else if(d.sub){docSub=d.sub;search="";render()}
+  else if(d.tnovos)oferecerTransferencia();
+  else if(d.conftxt)conferirTexto(document.getElementById("confTxt").value);
+  else if(d.enviado)askEnviado(d.enviado);
   else if(d.tf)toggleField(d.id,d.tf);
   else if(d.step)toggleStep(d.id,d.step);
   else if(d.falta)toggleFalta(d.id,d.falta);
@@ -618,9 +805,12 @@ document.addEventListener("click",e=>{
   else if(d.del){if(b.dataset.armed){removeItem(d.del);toast("Excluído")}else{b.dataset.armed="1";b.textContent="Confirmar exclusão";b.style.color="var(--red)";setTimeout(()=>{if(b.isConnected){delete b.dataset.armed;b.textContent="Excluir";b.style.color=""}},3000)}}
 });
 document.addEventListener("change",e=>{const el=e.target;
+  if(el.id==="pdfIn"){conferirArquivos([...el.files]);return}
+  if(el.id==="xlsIn"){importarExcel(el.files[0]);return}
   if(el.id==="entrada"){saveDia(today(),{entrada:el.value||null});toast("Entrada registrada")}
   else if(el.dataset.pd){saveDia(el.dataset.pd,{[el.dataset.pk]:el.value||null});toast("Ponto atualizado")}});
-document.addEventListener("input",e=>{if(e.target.id==="search"){search=e.target.value;const pos=e.target.selectionStart;render();const s=document.getElementById("search");s.focus();s.setSelectionRange(pos,pos)}});
+document.addEventListener("input",e=>{if(e.target.id==="baseSearch"){baseQ=e.target.value;const pos=e.target.selectionStart;render();const s=document.getElementById("baseSearch");s.focus();s.setSelectionRange(pos,pos);return}
+  if(e.target.id==="search"){search=e.target.value;const pos=e.target.selectionStart;render();const s=document.getElementById("search");s.focus();s.setSelectionRange(pos,pos)}});
 
 /* ---------- robozinho ---------- */
 let pending=[];
@@ -631,8 +821,8 @@ bot("Oi, Le! Me mande prazos, pedidos de documentos ou processos para cadastrar,
 const SYS=`Você organiza tarefas de uma advogada trabalhista brasileira (construtora Pacaembu). Hoje é {HOJE}. Converta o texto em itens JSON.
 Campos de cada item: tipo ("prazo" = prazo/tarefa avulsa como apólice, GRU, montar pasta, avisar alguém; "docs" = solicitação de documentos para montar pasta; "cadastro" = processo novo para cadastrar; "semaud" = processo já cadastrado sem audiência com docs solicitados), reclamante, processo (formato CNJ NNNNNNN-DD.AAAA.J.TR.OOOO), dataSolic, prazo (data de cobrança/prazo interno), fatal (prazo fatal), montarPasta, audiencia (todas as datas em AAAA-MM-DD; sem ano = ano corrente, ou próximo se já passou muito), quemCobrar (nome da pessoa a cobrar/avisar), assunto (assunto do e-mail, exato), obs (observação curta e clara), faltando (lista de documentos faltantes usando apenas: ${CHECKLIST.join("; ")}).
 Se "prazo e fatal no mesmo dia", repita a data. Blocos separados por linhas de traços são itens distintos. Use null para o que não houver.
-LISTA DO DIA: se o texto for uma lista de atividades (marcadores, como a lista enviada no Teams), cada marcador é um item separado: tipo "prazo", prazo = hoje, obs = a atividade escrita de forma clara (sem o número do processo), reclamante e processo se aparecerem, e concluido = hoje se a linha disser FEITO (senão null).
-Todo item "prazo" sem nenhuma data recebe prazo = hoje.`+`
+LISTA DO DIA: se o texto for uma lista de atividades (marcadores, como a lista enviada no Teams), cada marcador é um item separado: tipo "prazo", prazo = hoje, fatal = hoje, obs = a atividade escrita de forma clara (sem o número do processo), reclamante e processo se aparecerem, e concluido = hoje se a linha disser FEITO (senão null).
+Se o texto não disser o prazo fatal, deixe fatal null (a usuária completa). Não invente datas.`+`
 Responda só JSON: {"itens":[...],"resposta":"frase curta em português"}`;
 
 /* lista de tarefas do dia (a mesma do Teams): cada marcador vira um prazo de hoje; "FEITO" já entra concluído */
@@ -649,7 +839,7 @@ function parseLista(text){
     let name=nm?nm[1].split(/\s+/):[];
     const PECAS=/^(embargos?|declaração|contestação|manifestação|recurso|ordinário|revista|réplica|razões|finais|petição|relatório|agravo|instrumento|audiência|pasta|acordo|cálculos?|impugnação|defesa|ata|contrarrazões|memoriais|idpj|exceção|sentença|e|d[aeo]s?)$/i;
     while(name.length&&PECAS.test(name[0]))name.shift();
-    return {tipo:"prazo",processo:p?p[0]:null,reclamante:name.length>1?name.join(" "):null,obs,prazo:t,concluido:done?t:null};
+    return {tipo:"prazo",processo:p?p[0]:null,reclamante:name.length>1?name.join(" "):null,obs,prazo:t,fatal:t,dataSolic:t,concluido:done?t:null};
   });
 }
 function heuristic(text){
@@ -690,12 +880,11 @@ function propHTML(p,i){
   const ds=[["Solic.",p.dataSolic],["Prazo",p.prazo],["Fatal",p.fatal],["Pasta",p.montarPasta],["Aud.",p.audiencia]].filter(x=>x[1]).map(x=>x[0]+" "+brs(x[1])).join(" · ");
   return `<div class="prop" data-pi="${i}"><div class="card-top"><b>${esc(p.reclamante||"Sem reclamante")}</b><select data-ptipo="${i}" aria-label="Campo">${Object.entries(TIPOS).filter(([k])=>k!=="ok").map(([k,v])=>`<option value="${k}" ${p.tipo===k?"selected":""}>${v}</option>`).join("")}</select></div>
    <span class="proc">${esc(p.processo||"sem número")}</span>${ds?`<span>${ds}</span>`:""}${p.quemCobrar?`<span>Cobrar: <b>${esc(p.quemCobrar)}</b></span>`:""}${p.assunto?`<span class="muted">Assunto: ${esc(p.assunto)}</span>`:""}${p.obs?`<span>${esc(p.obs)}</span>`:""}${(p.faltando||[]).length?`<span>Falta: ${p.faltando.map(esc).join(", ")}</span>`:""}${p.concluido?`<span class="pill green" style="align-self:flex-start">Feito</span>`:""}
-   ${dup}${dateWarnings([p.dataSolic,p.prazo,p.fatal,p.montarPasta,p.audiencia])}<div class="actions"><button class="btn small primary" data-psave="${i}">Salvar</button><button class="btn small" data-pedit="${i}">Editar</button><button class="btn small ghost" data-pdrop="${i}">Descartar</button></div></div>`;
+   ${dup}${dateWarnings([p.dataSolic,p.prazo,p.fatal,p.montarPasta,p.audiencia])}${validate(p)?`<div class="dup hol">${esc(validate(p))}</div>`:""}<p class="lerr perr" style="margin:0"></p><div class="actions"><button class="btn small primary" data-psave="${i}">Salvar</button><button class="btn small" data-pedit="${i}">Editar</button><button class="btn small ghost" data-pdrop="${i}">Descartar</button></div></div>`;
 }
 composer.onsubmit=async e=>{e.preventDefault();const t=chatIn.value.trim();if(!t)return;me(t);chatIn.value="";sendBtn.disabled=true;
   const w=bot("Lendo…");const r=await interpret(t);sendBtn.disabled=false;
   const base=pending.length;const its=(r.itens||[]).map(x=>{const it={...x,tipo:TIPOS[x.tipo]?x.tipo:"prazo",faltando:(x.faltando||[]).filter(d=>CHECKLIST.includes(d))};
-    if(it.tipo==="prazo"&&!it.prazo&&!it.fatal&&!it.montarPasta)it.prazo=today();
     if(it.concluido&&it.tipo!=="prazo")delete it.concluido;return it});pending.push(...its);
   if(!its.length){w.textContent="Não encontrei nenhuma tarefa nesse texto. Tente incluir o processo ou o reclamante.";return}
   w.innerHTML=`${esc(r.resposta||"Encontrei estes itens:")}<div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;white-space:normal">${its.map((p,k)=>propHTML(p,base+k)).join("")}</div>${its.length>1?`<div class="actions" style="margin-top:8px"><button class="btn small primary" data-psaveall="${base}-${base+its.length}">Salvar todos</button></div>`:""}`;
@@ -722,16 +911,23 @@ addEventListener("resize",placeFab);placeFab();
 fab.onclick=()=>{if(fabMoved){fabMoved=false;return}setChat(chat.hidden)};chatClose.onclick=()=>setChat(false);
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(modalRoot.innerHTML)closeModal();else if(drawer){drawer=null;render()}else if(!chat.hidden)setChat(false)}});
 chatIn.addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey))composer.requestSubmit()});
-function commit(i){const p=pending[i];if(!p||p._saved)return;p._saved=true;const it={...p};delete it._saved;it.criadoEm=new Date().toISOString();saveItem(it);
-  const el=document.querySelector(`[data-pi="${i}"]`);if(el)el.innerHTML=`<span style="color:var(--green);font-weight:600">✓ Salvo em ${TIPOS[it.tipo]}</span>`}
+function commit(i,quiet){const p=pending[i];if(!p||p._saved)return true;const it={...p};delete it._saved;
+  const err=validate(it);
+  if(err){if(quiet){const el=document.querySelector(`[data-pi="${i}"] .perr`);if(el)el.textContent="Falta completar: "+err;return false}
+    openForm(it,x=>{pending[i]={...x};commit(i)},err);return false}
+  p._saved=true;applyDefaults(it);it.criadoEm=new Date().toISOString();saveItem(it);
+  const el=document.querySelector(`[data-pi="${i}"]`);if(el)el.innerHTML=`<span style="color:var(--green);font-weight:600">✓ Salvo em ${TIPOS[it.tipo]}</span>`;return true}
 msgs.addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;const d=b.dataset;
   if(d.psave)commit(+d.psave);
-  if(d.psaveall){const[a,z]=d.psaveall.split("-").map(Number);for(let i=a;i<z;i++)commit(i);toast("Itens salvos");b.remove()}
+  if(d.psaveall){const[a,z]=d.psaveall.split("-").map(Number);let bad=0;for(let i=a;i<z;i++)if(!commit(i,true))bad++;toast(bad?`${z-a-bad} salvos · ${bad} precisam ser completados (clique em Editar)`:"Itens salvos");if(!bad)b.remove()}
   if(d.pdrop){pending[+d.pdrop]._saved=true;b.closest(".prop").innerHTML=`<span class="muted">Descartado</span>`}
-  if(d.pedit){const i=+d.pedit;openForm(pending[i],it=>{pending[i]={...it};commit(i)})}
+  if(d.pedit){const i=+d.pedit;openForm(pending[i],it=>{pending[i]={...it};commit(i)},validate(pending[i]))}
 });
 msgs.addEventListener("change",e=>{if(e.target.dataset.ptipo){pending[+e.target.dataset.ptipo].tipo=e.target.value}});
 
+["dragover","dragenter"].forEach(t=>document.addEventListener(t,e=>{const z=e.target.closest&&e.target.closest("#drop");if(z){e.preventDefault();z.classList.add("over")}}));
+document.addEventListener("dragleave",e=>{const z=e.target.closest&&e.target.closest("#drop");if(z)z.classList.remove("over")});
+document.addEventListener("drop",e=>{const z=e.target.closest&&e.target.closest("#drop");if(!z)return;e.preventDefault();z.classList.remove("over");conferirArquivos([...e.dataTransfer.files].filter(f=>/pdf$/i.test(f.name)||f.type==="application/pdf"))});
 boot();
 </script>
 
