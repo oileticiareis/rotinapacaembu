@@ -167,6 +167,18 @@ h2{font-family:var(--display);font-weight:400;font-size:24px;margin:0;text-wrap:
 .drop{display:flex;flex-direction:column;align-items:center;gap:4px;padding:26px 16px;border:2px dashed color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 6%,var(--surface));cursor:pointer;text-align:center}
 .drop.over{background:var(--accent-soft);border-color:var(--accent)}
 .drop b{color:var(--accent);font-size:15px}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:8px;align-items:flex-start;font-size:13px;border:1px solid var(--line);border-radius:9px;padding:7px 10px;cursor:pointer}
+.opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.opt input{accent-color:var(--accent);margin-top:2px}
+.ot{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:var(--red);color:#fff;padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));box-shadow:0 4px 16px rgba(198,47,75,.3)}
+.ot-in{max-width:1500px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.ot-txt{flex:1 1 280px;min-width:0;font-weight:600}
+.ot-txt b{font-family:var(--mono);font-size:18px;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+.ot-bar{flex:1 1 220px;height:10px;border-radius:99px;background:rgba(255,255,255,.28);overflow:hidden}
+.ot-bar span{display:block;height:100%;background:#fff;border-radius:99px;transition:width 1s linear}
+.ot .btn{background:#fff;color:var(--red);border-color:#fff}
+@media (prefers-reduced-motion:no-preference){.ot{animation:otp 2s ease-in-out infinite}@keyframes otp{50%{background:color-mix(in srgb,var(--red) 85%,#000)}}}
 .subtabs{display:flex;gap:6px;flex-wrap:wrap}
 .subtab{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:7px 14px;font-weight:600;color:var(--muted)}
 .subtab[aria-current="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -217,6 +229,7 @@ details summary{cursor:pointer;color:var(--muted);font-weight:600;padding:4px 0}
 @media (prefers-reduced-motion:no-preference){.card,.prop{animation:in .18s ease-out}@keyframes in{from{transform:translateY(3px)}to{transform:none}}}
 </style>
 
+<div class="ot" id="ot" hidden role="alert"></div>
 <div class="app">
   <nav>
     <p class="brand">Rotina<br>Pacaembu</p>
@@ -563,11 +576,19 @@ function conferirTexto(t){if(!t.trim())return;conf={...analisarTexto(t),arquivo:
 function oferecerTransferencia(){
   const novos=(conf&&conf.trab||[]).filter(x=>x.status==="novo");if(!novos.length)return;
   modalRoot.innerHTML=`<div class="modal-bg" id="mbg"><div class="modal panel ask" role="dialog"><h3>${novos.length===1?"1 processo novo":novos.length+" processos novos"}</h3>
-   <p class="muted" style="margin:0">${novos.length===1?"Este processo trabalhista não está":"Estes processos trabalhistas não estão"} na base de cadastrados. Transferir para <b>Processos para cadastrar</b>?</p>
-   <div class="list">${novos.map(x=>`<label class="check" style="justify-content:flex-start"><input type="checkbox" class="tnovo" value="${esc(x.num)}" checked> <span><b>${esc(x.nome||"Reclamante não identificado")}</b><br><span class="proc">${esc(x.num)} · ${esc(x.trt)}</span></span></label>`).join("")}</div>
-   <div class="actions" style="justify-content:flex-end"><button class="btn ghost" id="tNao">Agora não</button><button class="btn primary" id="tSim">Sim, transferir</button></div></div></div>`;
+   <p class="muted" style="margin:0">${novos.length===1?"Este processo trabalhista não está":"Estes processos trabalhistas não estão"} na base de cadastrados. Escolha o que fazer com ${novos.length===1?"ele":"cada um"}:</p>
+   <div class="list">${novos.map((x,k)=>`<div class="card" style="padding:10px 12px;gap:8px"><div><b>${esc(x.nome||"Reclamante não identificado")}</b><br><span class="proc">${esc(x.num)} · ${esc(x.trt)}</span></div>
+     <div class="opts"><label class="opt"><input type="radio" name="tn${k}" value="cad" data-num="${esc(x.num)}" checked> <span>Processo novo: transferir para <b>Processos para cadastrar</b></span></label>
+     <label class="opt"><input type="radio" name="tn${k}" value="base" data-num="${esc(x.num)}"> <span>Não, já foi cadastrado: só incluir na <b>base de cadastrados</b></span></label></div></div>`).join("")}</div>
+   <div class="actions" style="justify-content:flex-end"><button class="btn ghost" id="tNao">Agora não</button><button class="btn primary" id="tSim">Confirmar</button></div></div></div>`;
   tNao.onclick=closeModal;mbg.onclick=e=>{if(e.target.id==="mbg")closeModal()};
-  tSim.onclick=()=>{const sel=[...document.querySelectorAll(".tnovo:checked")].map(x=>x.value);closeModal();transferir(sel)};
+  tSim.onclick=()=>{const sel=[...document.querySelectorAll('.opts input:checked')];closeModal();
+    transferir(sel.filter(r=>r.value==="cad").map(r=>r.dataset.num));incluirNaBase(sel.filter(r=>r.value==="base").map(r=>r.dataset.num))};
+}
+function incluirNaBase(nums){
+  if(!nums.length)return;const add=[];
+  nums.forEach(n=>{const x=conf.trab.find(y=>y.num===n);if(!x||baseIndex().has(normProc(n)))return;add.push({p:n,n:x.nome||"",t:"Reclamatória Trabalhista",s:"Ativo",em:today()});x.status="base";x.baseNome=x.nome||""});
+  if(!add.length)return;BASE=[...BASE,...add];saveBase();toast(add.length===1?"Incluído na base de cadastrados":`${add.length} processos incluídos na base`);
 }
 function transferir(nums){
   if(!nums.length)return;const d=brs(today());
@@ -928,6 +949,20 @@ msgs.addEventListener("change",e=>{if(e.target.dataset.ptipo){pending[+e.target.
 ["dragover","dragenter"].forEach(t=>document.addEventListener(t,e=>{const z=e.target.closest&&e.target.closest("#drop");if(z){e.preventDefault();z.classList.add("over")}}));
 document.addEventListener("dragleave",e=>{const z=e.target.closest&&e.target.closest("#drop");if(z)z.classList.remove("over")});
 document.addEventListener("drop",e=>{const z=e.target.closest&&e.target.closest("#drop");if(!z)return;e.preventDefault();z.classList.remove("over");conferirArquivos([...e.dataTransfer.files].filter(f=>/pdf$/i.test(f.name)||f.type==="application/pdf"))});
+/* aviso de 18h30: relatório do fim do dia ainda não enviado (ponto de saída) */
+const OT_START=18*60+30, OT_MAX=120;
+function tickOT(){
+  const t=today(),dia=dias[t]||{},now=new Date(),min=now.getHours()*60+now.getMinutes();
+  const show=itemsLoaded&&diasLoaded&&!dia.fim&&min>=OT_START&&(isWorkday(t)||!!dia.entrada);
+  if(!show){if(!ot.hidden)ot.hidden=true;return}
+  const secs=Math.max(0,(min-OT_START)*60+now.getSeconds());const h=Math.floor(secs/3600),m=Math.floor(secs%3600/60),sc=secs%60;
+  const pct=Math.min(100,secs/(OT_MAX*60)*100);
+  const html=`<div class="ot-in"><span class="ot-txt">Já passou das 18h30 e você continua trabalhando. Tempo além do horário: <b>${pad(h)}:${pad(m)}:${pad(sc)}</b></span>
+   <div class="ot-bar" role="progressbar" aria-label="Tempo além do horário, de 0 a 2 horas" aria-valuenow="${Math.round(pct)}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+   <button class="btn small" data-rot="fim">Enviar relatório e registrar saída</button></div>`;
+  if(ot.hidden){ot.innerHTML=html;ot.hidden=false}else{ot.querySelector(".ot-txt b").textContent=`${pad(h)}:${pad(m)}:${pad(sc)}`;const bs=ot.querySelector(".ot-bar span");bs.style.width=pct+"%";ot.querySelector(".ot-bar").setAttribute("aria-valuenow",Math.round(pct))}
+}
+setInterval(tickOT,1000);
 boot();
 </script>
 
